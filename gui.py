@@ -7,14 +7,18 @@ from flask import Flask, render_template_string, request, redirect, url_for
 
 app = Flask(__name__)
 CONFIG_FILE = 'config.json'
-SOURCE_URL = os.environ.get('XML_URL', 'https://legacy.scoreatl.com/xml/scoreboard/hs/top/')
+DEFAULT_LIVE_LINK = os.environ.get('XML_URL', 'https://legacy.scoreatl.com/xml/scoreboard/hs/top/')
 
 def get_config():
     try:
         with open(CONFIG_FILE, 'r') as f:
-            return json.load(f)
+            cfg = json.load(f)
+            if "live_link" not in cfg:
+                cfg["live_link"] = DEFAULT_LIVE_LINK
+            return cfg
     except (FileNotFoundError, json.JSONDecodeError):
         return {
+            "live_link": DEFAULT_LIVE_LINK,
             "enable_spacer": True,
             "custom_items": [""],
             "output_items": []
@@ -423,6 +427,14 @@ HTML_TEMPLATE = """
                     </h3>
                     <span class="item-count-badge">{{ live_items|length }} Games</span>
                 </div>
+                <form action="/save_live_link" method="POST" style="margin-bottom: 12px; display: flex; gap: 8px;">
+                    <input type="url" name="live_link" class="custom-input" value="{{ live_link }}" placeholder="Live XML URL..." required style="font-size: 0.85rem; padding: 6px 10px;">
+                    <button type="submit" class="btn" style="padding: 6px 14px; font-size: 0.82rem; white-space: nowrap;" title="Save and load XML source URL">
+                        <svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                        <span>Save URL</span>
+                    </button>
+                </form>
+
                 <div class="instructions-hint">
                     Drag any game box below into the <strong>Output Box</strong> on the right.
                 </div>
@@ -453,7 +465,7 @@ HTML_TEMPLATE = """
                     {% endfor %}
                 </div>
                 <p class="status-text">
-                    Pulling live scores dynamically from scoreatl.com XML.
+                    Pulling live scores dynamically from configured XML feed.
                 </p>
             </div>
 
@@ -863,6 +875,7 @@ def index():
     config = get_config()
     custom_items = config.get("custom_items", [])
     output_items = config.get("output_items")
+    live_link = config.get("live_link") or DEFAULT_LIVE_LINK
     
     if output_items is None:
         output_items = list(custom_items) if custom_items else []
@@ -881,7 +894,7 @@ def index():
 
     # Fetch The Raw Source XML (Independent parsing for Box 1)
     try:
-        req_live = urllib.request.Request(SOURCE_URL, headers={'User-Agent': 'Mozilla/5.0'})
+        req_live = urllib.request.Request(live_link, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req_live, timeout=5) as resp_live:
             raw_xml_live = resp_live.read()
             
@@ -914,11 +927,21 @@ def index():
         HTML_TEMPLATE, 
         output_items=output_items,
         live_items=live_items,
+        live_link=live_link,
         combined_ticker=combined_ticker,
         error=error,
         enable_spacer=config.get("enable_spacer", True),
         custom_items=custom_items
     )
+
+@app.route('/save_live_link', methods=['POST'])
+def save_live_link():
+    config = get_config()
+    new_url = request.form.get('live_link', '').strip()
+    if new_url:
+        config['live_link'] = new_url
+        save_config(config)
+    return redirect(url_for('index'))
 
 @app.route('/toggle_spacer', methods=['POST'])
 def toggle_spacer():

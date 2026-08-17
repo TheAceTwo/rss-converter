@@ -6,16 +6,20 @@ from flask import Flask, Response
 
 app = Flask(__name__)
 
-SOURCE_URL = os.environ.get('XML_URL', 'https://legacy.scoreatl.com/xml/scoreboard/hs/top/')
+DEFAULT_LIVE_LINK = os.environ.get('XML_URL', 'https://legacy.scoreatl.com/xml/scoreboard/hs/top/')
 CONFIG_FILE = 'config.json'
 
 def get_config():
     """Reads the configuration file, sets defaults if missing."""
     try:
         with open(CONFIG_FILE, 'r') as f:
-            return json.load(f)
+            cfg = json.load(f)
+            if "live_link" not in cfg:
+                cfg["live_link"] = DEFAULT_LIVE_LINK
+            return cfg
     except (FileNotFoundError, json.JSONDecodeError):
         return {
+            "live_link": DEFAULT_LIVE_LINK,
             "enable_spacer": True,
             "custom_items": [],
             "output_items": []
@@ -25,13 +29,14 @@ def get_config():
 @app.route('/rss')
 def get_rss():
     config = get_config()
+    source_url = config.get("live_link") or DEFAULT_LIVE_LINK
     
     # Build base RSS 2.0 structure
     rss = ET.Element("rss", version="2.0")
     channel = ET.SubElement(rss, "channel")
     ET.SubElement(channel, "title").text = "Score Atlanta High School Scoreboard"
-    ET.SubElement(channel, "link").text = SOURCE_URL
-    ET.SubElement(channel, "description").text = "Live dynamic feed conversion for scoreatl.com"
+    ET.SubElement(channel, "link").text = source_url
+    ET.SubElement(channel, "description").text = "Live dynamic feed conversion"
 
     output_items = config.get("output_items")
     if output_items is None:
@@ -43,7 +48,7 @@ def get_rss():
             
         item = ET.SubElement(channel, "item")
         ET.SubElement(item, "title").text = str(item_text).strip()
-        ET.SubElement(item, "link").text = f"{SOURCE_URL}#item_{i}"
+        ET.SubElement(item, "link").text = f"{source_url}#item_{i}"
         
         html_desc = f"<h3>{str(item_text).strip()}</h3><p>Active Output Feed Item</p>"
         desc_element = ET.SubElement(item, "description")
@@ -57,7 +62,7 @@ def get_rss():
     if config.get("enable_spacer", True):
         spacer_item = ET.SubElement(channel, "item")
         ET.SubElement(spacer_item, "title").text = "\u00A0"
-        ET.SubElement(spacer_item, "link").text = f"{SOURCE_URL}#spacer"
+        ET.SubElement(spacer_item, "link").text = f"{source_url}#spacer"
         ET.SubElement(spacer_item, "guid").text = "spacer_end"
 
     # Convert XML to string and replace escaped CDATA markers
