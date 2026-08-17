@@ -3,13 +3,34 @@ import json
 import xml.etree.ElementTree as ET
 import urllib.request
 # pyrefly: ignore [missing-import]
-from flask import Flask, render_template_string, request, redirect, url_for
+from flask import Flask, render_template_string, request, redirect, url_for, session
 
 app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'rss-converter-gui-secret-key-999')
 CONFIG_FILE = 'config.json'
-DEFAULT_LIVE_LINK = os.environ.get('XML_URL', 'https://legacy.scoreatl.com/xml/scoreboard/hs/top/')
+DEFAULT_LIVE_LINK = os.environ.get('XML_URL', '')
+
+DEFAULT_CONFIG = {
+    "live_link": DEFAULT_LIVE_LINK,
+    "enable_spacer": True,
+    "auth_username": "admin",
+    "auth_password": "password",
+    "custom_items": [""],
+    "output_items": []
+}
+
+def save_config(config):
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=2)
 
 def get_config():
+    if not os.path.exists(CONFIG_FILE):
+        cfg = DEFAULT_CONFIG.copy()
+        try:
+            save_config(cfg)
+        except OSError:
+            pass
+        return cfg
     try:
         with open(CONFIG_FILE, 'r') as f:
             cfg = json.load(f)
@@ -17,16 +38,12 @@ def get_config():
                 cfg["live_link"] = DEFAULT_LIVE_LINK
             return cfg
     except (FileNotFoundError, json.JSONDecodeError):
-        return {
-            "live_link": DEFAULT_LIVE_LINK,
-            "enable_spacer": True,
-            "custom_items": [""],
-            "output_items": []
-        }
-
-def save_config(config):
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=2)
+        cfg = DEFAULT_CONFIG.copy()
+        try:
+            save_config(cfg)
+        except OSError:
+            pass
+        return cfg
 
 def node_to_dict(node):
     """Recursively converts XML nodes into a clean dictionary structure."""
@@ -38,6 +55,191 @@ def node_to_dict(node):
         else:
             data[child.tag] = node_to_dict(child)
     return data
+
+LOGIN_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - RSS Control Panel</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+            background: #0f1117; 
+            color: #e0e0e0; 
+            margin: 0; 
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .login-card {
+            width: 100%;
+            max-width: 400px;
+            background: #181c24;
+            border: 1px solid #28303f;
+            border-radius: 12px;
+            padding: 36px 30px;
+            box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255,255,255,0.05);
+        }
+        .logo-area {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+        .logo-icon {
+            width: 52px;
+            height: 52px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #0066cc 0%, #0099ff 100%);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 12px;
+            box-shadow: 0 4px 16px rgba(0, 102, 204, 0.4);
+        }
+        .logo-area h2 {
+            margin: 0 0 6px 0;
+            font-size: 1.4rem;
+            color: #ffffff;
+            font-weight: 700;
+            letter-spacing: -0.4px;
+        }
+        .logo-area p {
+            margin: 0;
+            color: #7b879b;
+            font-size: 0.88rem;
+        }
+        .form-group {
+            margin-bottom: 18px;
+        }
+        .form-label {
+            display: block;
+            margin-bottom: 7px;
+            font-size: 0.84rem;
+            font-weight: 600;
+            color: #abb5c4;
+        }
+        .form-input {
+            width: 100%;
+            background: #0f131a;
+            border: 1px solid #28303f;
+            color: #fff;
+            padding: 11px 14px;
+            border-radius: 7px;
+            font-size: 0.95rem;
+            transition: all 0.15s ease;
+        }
+        .form-input:focus {
+            border-color: #0066cc;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.25);
+            background: #121721;
+        }
+        .btn-submit {
+            width: 100%;
+            background: #0066cc;
+            color: #fff;
+            padding: 12px;
+            border: none;
+            border-radius: 7px;
+            font-weight: 600;
+            font-size: 0.96rem;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            margin-top: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .btn-submit:hover {
+            background: #0052a3;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 14px rgba(0, 102, 204, 0.4);
+        }
+        .btn-submit:active {
+            transform: translateY(0);
+        }
+        .error-alert {
+            background: #3d1418;
+            border: 1px solid #6e2029;
+            color: #fca5a5;
+            padding: 10px 14px;
+            border-radius: 7px;
+            font-size: 0.86rem;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .footer-note {
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.78rem;
+            color: #576479;
+        }
+        .footer-note code {
+            background: #10141d;
+            padding: 2px 5px;
+            border-radius: 4px;
+            color: #8b9bb4;
+            font-size: 0.76rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="logo-area">
+            <div class="logo-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+            </div>
+            <h2>RSS Control Panel</h2>
+            <p>Enter credentials to access the manager</p>
+        </div>
+
+        {% if error %}
+            <div class="error-alert">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                </svg>
+                <span>{{ error }}</span>
+            </div>
+        {% endif %}
+
+        <form method="POST" action="/login">
+            <div class="form-group">
+                <label class="form-label" for="username">Username</label>
+                <input type="text" id="username" name="username" class="form-input" placeholder="admin" required autofocus autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="password">Password</label>
+                <input type="password" id="password" name="password" class="form-input" placeholder="••••••••" required autocomplete="current-password">
+            </div>
+            <button type="submit" class="btn-submit">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+                    <polyline points="10 17 15 12 10 7"></polyline>
+                    <line x1="15" y1="12" x2="3" y2="12"></line>
+                </svg>
+                <span>Sign In</span>
+            </button>
+        </form>
+
+        <div class="footer-note">
+            Username &amp; password can be configured in <code>config.json</code>
+        </div>
+    </div>
+</body>
+</html>
+"""
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -196,7 +398,8 @@ HTML_TEMPLATE = """
             align-items: center;
             gap: 4px;
         }
-        .draggable-card:hover .btn-quick-add {
+        .draggable-card:hover .btn-quick-add,
+        .custom-row:hover .btn-quick-add {
             opacity: 1;
         }
         .btn-quick-add:hover {
@@ -389,7 +592,7 @@ HTML_TEMPLATE = """
         <div class="header">
             <div class="header-title">
                 <h1>RSS Control Panel</h1>
-                <span class="badge-live">ProPresenter Feed</span>
+                <span class="badge-live">Live Feed</span>
             </div>
             
             <div class="controls">
@@ -408,6 +611,10 @@ HTML_TEMPLATE = """
                     <svg class="icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                     <span>Refresh Feeds</span>
                 </a>
+                <a href="/logout" class="btn btn-danger" style="padding: 10px 14px; font-size: 0.85rem;" title="Sign out of control panel">
+                    <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    <span>Logout</span>
+                </a>
             </div>
         </div>
 
@@ -425,10 +632,10 @@ HTML_TEMPLATE = """
                         <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.2 19.1 19.1"/></svg>
                         <span>Incoming Live Link</span>
                     </h3>
-                    <span class="item-count-badge">{{ live_items|length }} Games</span>
+                    <span class="item-count-badge">{{ live_items|length }} Items</span>
                 </div>
                 <form action="/save_live_link" method="POST" style="margin-bottom: 12px; display: flex; gap: 8px;">
-                    <input type="url" name="live_link" class="custom-input" value="{{ live_link }}" placeholder="Live XML URL..." required style="font-size: 0.85rem; padding: 6px 10px;">
+                    <input type="url" name="live_link" class="custom-input" value="{{ live_link }}" placeholder="Enter Live XML URL..." style="font-size: 0.85rem; padding: 6px 10px;">
                     <button type="submit" class="btn" style="padding: 6px 14px; font-size: 0.82rem; white-space: nowrap;" title="Save and load XML source URL">
                         <svg class="icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                         <span>Save URL</span>
@@ -436,7 +643,7 @@ HTML_TEMPLATE = """
                 </form>
 
                 <div class="instructions-hint">
-                    Drag any game box below into the <strong>Output Box</strong> on the right.
+                    Drag any item box below into the <strong>Output Feed</strong> on the right.
                 </div>
                 
                 <div class="item-list" id="live-items-list">
@@ -460,12 +667,12 @@ HTML_TEMPLATE = """
                         </div>
                     {% else %}
                         <div style="padding: 20px; text-align: center; color: #666; font-style: italic;">
-                            No live games currently available.
+                            No live items currently available.
                         </div>
                     {% endfor %}
                 </div>
                 <p class="status-text">
-                    Pulling live scores dynamically from configured XML feed.
+                    Pulling live items dynamically from configured XML feed.
                 </p>
             </div>
 
@@ -498,6 +705,10 @@ HTML_TEMPLATE = """
                                        value="{{ item }}" 
                                        placeholder="Custom ticker text {{ loop.index }}..."
                                        oninput="updateCustomDragData(this)">
+                                <button type="button" class="btn-quick-add" onclick="addCustomInputToOutput(this)" title="Quick add to output feed">
+                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                    <span>Add</span>
+                                </button>
                                 <button type="button" class="btn-remove" onclick="removeCustomRow(this)" title="Delete box">
                                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                                 </button>
@@ -529,7 +740,7 @@ HTML_TEMPLATE = """
                     <span class="item-count-badge" id="output-count" style="background:#0066cc; color:#fff;">{{ output_items|length }} Active</span>
                 </div>
                 <div class="instructions-hint">
-                    Drop boxes here from Live Feed or Custom Text. Drag to reorder, click remove to delete.
+                    Drop items here from Live Feed or Custom Text. Drag to reorder, click remove to delete.
                 </div>
                 
                 <form action="/save_output" method="POST" id="output-form" style="display: flex; flex-direction: column; flex: 1;">
@@ -565,17 +776,17 @@ HTML_TEMPLATE = """
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
                             </svg>
                             <div><strong>Drop boxes here</strong></div>
-                            <div style="font-size: 0.8rem; margin-top: 4px; color: #556677;">Drag games or custom texts here to build your broadcast feed</div>
+                            <div style="font-size: 0.8rem; margin-top: 4px; color: #556677;">Drag live or custom items here to build your output feed</div>
                         </div>
                     </div>
                     
-                    <button type="submit" class="btn btn-success" style="width: 100%; margin-top: 14px;" title="Save changes and immediately update RSS feed sent to ProPresenter">
+                    <button type="submit" class="btn btn-success" style="width: 100%; margin-top: 14px;" title="Save changes and immediately update RSS feed">
                         <svg class="icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                         <span>Save Output Feed</span>
                     </button>
                 </form>
                 <p class="status-text">
-                    Press <strong>Save Output Feed</strong> to push your curated lineup live to ProPresenter.
+                    Press <strong>Save Output Feed</strong> to update your live RSS feed.
                 </p>
             </div>
         </div>
@@ -647,6 +858,10 @@ HTML_TEMPLATE = """
                     <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor"><circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/><circle cx="2" cy="7" r="1.5"/><circle cx="8" cy="7" r="1.5"/><circle cx="2" cy="12" r="1.5"/><circle cx="8" cy="12" r="1.5"/></svg>
                 </span>
                 <input type="text" name="custom_item" class="custom-input" placeholder="Custom ticker text ${count}..." oninput="updateCustomDragData(this)">
+                <button type="button" class="btn-quick-add" onclick="addCustomInputToOutput(this)" title="Quick add to output feed">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    <span>Add</span>
+                </button>
                 <button type="button" class="btn-remove" onclick="removeCustomRow(this)" title="Delete box">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
@@ -654,6 +869,14 @@ HTML_TEMPLATE = """
             container.appendChild(div);
             updateCustomCount();
             div.querySelector('input').focus();
+        }
+
+        function addCustomInputToOutput(btn) {
+            const row = btn.closest('.custom-row');
+            if (!row) return;
+            const input = row.querySelector('input');
+            if (!input || !input.value.trim()) return;
+            addTextToOutput(input.value.trim());
         }
 
         function removeCustomRow(btn) {
@@ -892,36 +1115,47 @@ def index():
         valid_items = [str(it).strip() for it in output_items if str(it).strip()]
         combined_ticker = "  |  ".join(valid_items)
 
-    # Fetch The Raw Source XML (Independent parsing for Box 1)
-    try:
-        req_live = urllib.request.Request(live_link, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req_live, timeout=5) as resp_live:
-            raw_xml_live = resp_live.read()
-            
-        root_live = ET.fromstring(raw_xml_live)
-        
-        for game in root_live.findall('game'):
-            game_data = node_to_dict(game)
-            
-            home = game_data.get('home', {})
-            away = game_data.get('away', {})
-            
-            away_name = away.get('name', 'Away')
-            away_score = away.get('score', '0')
-            home_name = home.get('name', 'Home')
-            home_score = home.get('score', '0')
-            
-            status = game_data.get('statusText', '').strip()
-            
-            if status and status not in ["0", "Q0"]:
-                title_str = f"{away_name} {away_score} {home_name} {home_score} {status}"
-            else:
-                title_str = f"{away_name} {away_score} {home_name} {home_score}"
+    # Fetch The Raw Source XML if a link is provided
+    if live_link and live_link.strip():
+        try:
+            req_live = urllib.request.Request(live_link.strip(), headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req_live, timeout=5) as resp_live:
+                raw_xml_live = resp_live.read()
                 
-            live_items.append(title_str)
+            root_live = ET.fromstring(raw_xml_live)
             
-    except Exception as e:
-        error = f"Error fetching live XML: {str(e)}"
+            # Check for RSS items or Atom entries
+            items = root_live.findall('.//item') or root_live.findall('.//entry')
+            if items:
+                for it in items:
+                    title_el = it.find('title')
+                    if title_el is not None and title_el.text:
+                        live_items.append(title_el.text.strip())
+            # Check for scoreboard <game> elements
+            elif root_live.findall('game') or root_live.findall('.//game'):
+                for game in (root_live.findall('game') or root_live.findall('.//game')):
+                    game_data = node_to_dict(game)
+                    home = game_data.get('home', {})
+                    away = game_data.get('away', {})
+                    away_name = away.get('name', 'Away')
+                    away_score = away.get('score', '0')
+                    home_name = home.get('name', 'Home')
+                    home_score = home.get('score', '0')
+                    status = game_data.get('statusText', '').strip()
+                    if status and status not in ["0", "Q0"]:
+                        title_str = f"{away_name} {away_score} {home_name} {home_score} {status}"
+                    else:
+                        title_str = f"{away_name} {away_score} {home_name} {home_score}"
+                    live_items.append(title_str)
+            else:
+                # Generic element text parsing
+                for child in root_live:
+                    text = (child.text or '').strip()
+                    if text:
+                        live_items.append(text)
+                        
+        except Exception as e:
+            error = f"Error fetching live XML: {str(e)}"
 
     return render_template_string(
         HTML_TEMPLATE, 
@@ -938,9 +1172,8 @@ def index():
 def save_live_link():
     config = get_config()
     new_url = request.form.get('live_link', '').strip()
-    if new_url:
-        config['live_link'] = new_url
-        save_config(config)
+    config['live_link'] = new_url
+    save_config(config)
     return redirect(url_for('index'))
 
 @app.route('/toggle_spacer', methods=['POST'])
@@ -973,6 +1206,46 @@ def save_custom():
     config['custom_items'] = cleaned_items if cleaned_items else [""]
     save_config(config)
     return redirect(url_for('index'))
+
+@app.before_request
+def require_login():
+    config = get_config()
+    required_user = str(config.get("auth_username", "")).strip()
+    required_pass = str(config.get("auth_password", "")).strip()
+    
+    # If credentials are configured, enforce authentication
+    if required_user and required_pass:
+        if request.endpoint not in ('login', 'static') and not session.get('logged_in'):
+            return redirect(url_for('login'))
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    config = get_config()
+    required_user = str(config.get("auth_username", "")).strip()
+    required_pass = str(config.get("auth_password", "")).strip()
+    
+    # If no credentials are set in config, allow access directly
+    if not required_user or not required_pass:
+        session['logged_in'] = True
+        return redirect(url_for('index'))
+        
+    error = None
+    if request.method == 'POST':
+        user = request.form.get('username', '').strip()
+        pwd = request.form.get('password', '')
+        
+        if user == required_user and pwd == required_pass:
+            session['logged_in'] = True
+            return redirect(url_for('index'))
+        else:
+            error = "Invalid username or password. Please try again."
+            
+    return render_template_string(LOGIN_TEMPLATE, error=error)
+
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    return redirect(url_for('login'))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001)

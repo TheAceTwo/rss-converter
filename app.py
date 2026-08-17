@@ -6,11 +6,32 @@ from flask import Flask, Response
 
 app = Flask(__name__)
 
-DEFAULT_LIVE_LINK = os.environ.get('XML_URL', 'https://legacy.scoreatl.com/xml/scoreboard/hs/top/')
+DEFAULT_LIVE_LINK = os.environ.get('XML_URL', '')
 CONFIG_FILE = 'config.json'
 
+DEFAULT_CONFIG = {
+    "live_link": DEFAULT_LIVE_LINK,
+    "enable_spacer": True,
+    "auth_username": "heres-200-digits-of-pi-since-you-wont-change-the-default-login",
+    "auth_password": "3.14159265358979323846264338327950288419716939937510582097494459230781640628620899862803482534211706798214808651328230664709384460955058223172535940812848111745028410270193852110555964462294895493038196",
+    "custom_items": [""],
+    "output_items": []
+}
+
+def save_config(config):
+    """Saves the configuration to config.json."""
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=2)
+
 def get_config():
-    """Reads the configuration file, sets defaults if missing."""
+    """Reads the configuration file, creating and setting defaults if missing."""
+    if not os.path.exists(CONFIG_FILE):
+        cfg = DEFAULT_CONFIG.copy()
+        try:
+            save_config(cfg)
+        except OSError:
+            pass
+        return cfg
     try:
         with open(CONFIG_FILE, 'r') as f:
             cfg = json.load(f)
@@ -18,12 +39,12 @@ def get_config():
                 cfg["live_link"] = DEFAULT_LIVE_LINK
             return cfg
     except (FileNotFoundError, json.JSONDecodeError):
-        return {
-            "live_link": DEFAULT_LIVE_LINK,
-            "enable_spacer": True,
-            "custom_items": [],
-            "output_items": []
-        }
+        cfg = DEFAULT_CONFIG.copy()
+        try:
+            save_config(cfg)
+        except OSError:
+            pass
+        return cfg
 
 @app.route('/')
 @app.route('/rss')
@@ -34,8 +55,8 @@ def get_rss():
     # Build base RSS 2.0 structure
     rss = ET.Element("rss", version="2.0")
     channel = ET.SubElement(rss, "channel")
-    ET.SubElement(channel, "title").text = "Score Atlanta High School Scoreboard"
-    ET.SubElement(channel, "link").text = source_url
+    ET.SubElement(channel, "title").text = "Dynamic RSS Feed"
+    ET.SubElement(channel, "link").text = source_url or "http://localhost:5000/rss"
     ET.SubElement(channel, "description").text = "Live dynamic feed conversion"
 
     output_items = config.get("output_items")
@@ -48,7 +69,7 @@ def get_rss():
             
         item = ET.SubElement(channel, "item")
         ET.SubElement(item, "title").text = str(item_text).strip()
-        ET.SubElement(item, "link").text = f"{source_url}#item_{i}"
+        ET.SubElement(item, "link").text = f"{source_url}#item_{i}" if source_url else f"#item_{i}"
         
         html_desc = f"<h3>{str(item_text).strip()}</h3><p>Active Output Feed Item</p>"
         desc_element = ET.SubElement(item, "description")
@@ -62,7 +83,7 @@ def get_rss():
     if config.get("enable_spacer", True):
         spacer_item = ET.SubElement(channel, "item")
         ET.SubElement(spacer_item, "title").text = "\u00A0"
-        ET.SubElement(spacer_item, "link").text = f"{source_url}#spacer"
+        ET.SubElement(spacer_item, "link").text = f"{source_url}#spacer" if source_url else "#spacer"
         ET.SubElement(spacer_item, "guid").text = "spacer_end"
 
     # Convert XML to string and replace escaped CDATA markers
