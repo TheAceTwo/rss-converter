@@ -1,27 +1,54 @@
 import os
 import json
+import time
 import xml.etree.ElementTree as ET
 import urllib.request
 # pyrefly: ignore [missing-import]
 from flask import Flask, render_template_string, request, redirect, url_for, session
+import logger as activity_log
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'rss-converter-gui-secret-key-999')
 CONFIG_FILE = 'config.json'
 DEFAULT_LIVE_LINK = os.environ.get('XML_URL', '')
 
+# ==============================================================================
+# DEFAULT CONFIGURATION
+# - live_link: XML/RSS source link. Leave empty ("") if using custom text items only.
+# - enable_spacer: Appends a blank item to the RSS feed for smooth ticker looping.
+# - auth_username & auth_password: These are NOT included in the defaults.
+#   They can ONLY be set by manually editing config.json.
+#   The app will NEVER write or overwrite these fields — they are read-only from
+#   the app's perspective. Setting either to "" (or omitting them) disables login.
+# ==============================================================================
 DEFAULT_CONFIG = {
     "live_link": DEFAULT_LIVE_LINK,
     "enable_spacer": True,
-    "auth_username": "admin",
-    "auth_password": "password",
     "custom_items": [""],
     "output_items": []
 }
 
+# Auth fields are never written by the app — only by the user editing config.json directly.
+_AUTH_KEYS = {"auth_username", "auth_password"}
+
 def save_config(config):
+    """Saves config to disk. Auth fields are always stripped from what gets written
+    and re-read from the existing file so the app can never change them."""
+    # Pull current auth off disk (if any) so they survive the write.
+    preserved = {}
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            on_disk = json.load(f)
+        preserved = {k: on_disk[k] for k in _AUTH_KEYS if k in on_disk}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+
+    # Strip auth from whatever was passed in, then put disk values back.
+    out = {k: v for k, v in config.items() if k not in _AUTH_KEYS}
+    out.update(preserved)
+
     with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=2)
+        json.dump(out, f, indent=2)
 
 def get_config():
     if not os.path.exists(CONFIG_FILE):
@@ -217,13 +244,13 @@ LOGIN_TEMPLATE = """
         <form method="POST" action="/login">
             <div class="form-group">
                 <label class="form-label" for="username">Username</label>
-                <input type="text" id="username" name="username" class="form-input" placeholder="admin" required autofocus autocomplete="username">
+                <input type="text" id="username" name="username" class="form-input" placeholder="admin" required autofocus autocomplete="username" {% if is_locked %}disabled style="opacity:0.5; cursor:not-allowed;"{% endif %}>
             </div>
             <div class="form-group">
                 <label class="form-label" for="password">Password</label>
-                <input type="password" id="password" name="password" class="form-input" placeholder="••••••••" required autocomplete="current-password">
+                <input type="password" id="password" name="password" class="form-input" placeholder="••••••••" required autocomplete="current-password" {% if is_locked %}disabled style="opacity:0.5; cursor:not-allowed;"{% endif %}>
             </div>
-            <button type="submit" class="btn-submit">
+            <button type="submit" class="btn-submit" {% if is_locked %}disabled style="opacity:0.5; cursor:not-allowed; background:#444;"{% endif %}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
                     <polyline points="10 17 15 12 10 7"></polyline>
@@ -234,8 +261,178 @@ LOGIN_TEMPLATE = """
         </form>
 
         <div class="footer-note">
-            Username &amp; password can be configured in <code>config.json</code>
+            Configure credentials in <code>config.json</code> (leave blank to disable login).
         </div>
+    </div>
+</body>
+</html>
+"""
+
+SETUP_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Setup Required - RSS Control Panel</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: #0f1117;
+            color: #e0e0e0;
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .card {
+            width: 100%;
+            max-width: 480px;
+            background: #181c24;
+            border: 1px solid #28303f;
+            border-radius: 12px;
+            padding: 36px 30px;
+            box-shadow: 0 12px 36px rgba(0,0,0,0.5);
+        }
+        .icon-area {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        .icon-wrap {
+            width: 56px;
+            height: 56px;
+            border-radius: 14px;
+            background: linear-gradient(135deg, #b45309 0%, #f59e0b 100%);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 14px;
+            box-shadow: 0 4px 16px rgba(245,158,11,0.35);
+        }
+        h2 {
+            margin: 0 0 6px 0;
+            font-size: 1.35rem;
+            color: #fff;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+            text-align: center;
+        }
+        .subtitle {
+            margin: 0 0 28px 0;
+            color: #7b879b;
+            font-size: 0.88rem;
+            text-align: center;
+        }
+        .step {
+            display: flex;
+            gap: 14px;
+            align-items: flex-start;
+            margin-bottom: 18px;
+        }
+        .step-num {
+            flex-shrink: 0;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: #1e2535;
+            border: 1px solid #2e3a50;
+            color: #7b95c4;
+            font-size: 0.8rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .step-text {
+            font-size: 0.9rem;
+            color: #c8d0dc;
+            line-height: 1.55;
+            padding-top: 3px;
+        }
+        code {
+            background: #10141d;
+            border: 1px solid #222c3c;
+            padding: 1px 6px;
+            border-radius: 4px;
+            color: #7eb8f7;
+            font-size: 0.82rem;
+            font-family: 'Cascadia Code', 'Fira Mono', monospace;
+        }
+        .code-block {
+            background: #10141d;
+            border: 1px solid #222c3c;
+            border-radius: 8px;
+            padding: 14px 16px;
+            margin: 10px 0 0 0;
+            font-family: 'Cascadia Code', 'Fira Mono', monospace;
+            font-size: 0.82rem;
+            color: #7eb8f7;
+            line-height: 1.7;
+            overflow-x: auto;
+        }
+        .divider {
+            border: none;
+            border-top: 1px solid #1e2535;
+            margin: 24px 0;
+        }
+        .refresh-note {
+            text-align: center;
+            font-size: 0.82rem;
+            color: #576479;
+        }
+        .refresh-note a {
+            color: #4d8fd4;
+            text-decoration: none;
+        }
+        .refresh-note a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon-area">
+            <div class="icon-wrap">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                </svg>
+            </div>
+            <h2>Setup Required</h2>
+            <p class="subtitle">No login credentials are configured yet.</p>
+        </div>
+
+        <div class="step">
+            <div class="step-num">1</div>
+            <div class="step-text">
+                A <code>config.json</code> file has been created in the application directory.
+            </div>
+        </div>
+        <div class="step">
+            <div class="step-num">2</div>
+            <div class="step-text">
+                Open <code>config.json</code> and add your credentials:
+                <div class="code-block">
+                    &quot;auth_username&quot;: &quot;your_username&quot;,<br>
+                    &quot;auth_password&quot;: &quot;your_password&quot;
+                </div>
+            </div>
+        </div>
+        <div class="step">
+            <div class="step-num">3</div>
+            <div class="step-text">
+                Save the file, then <a href="/">click here to continue</a>. No server restart needed.
+            </div>
+        </div>
+
+        <hr class="divider">
+        <p class="refresh-note">
+            Once credentials are saved in <code>config.json</code>, <a href="/">refresh this page</a>.
+        </p>
     </div>
 </body>
 </html>
@@ -1157,6 +1354,10 @@ def index():
         except Exception as e:
             error = f"Error fetching live XML: {str(e)}"
 
+    # Log the live feed content the first time it's fetched and whenever it changes.
+    # Repeated page loads with identical content are silently ignored.
+    activity_log.log_live_items_change(live_items)
+
     return render_template_string(
         HTML_TEMPLATE, 
         output_items=output_items,
@@ -1171,9 +1372,12 @@ def index():
 @app.route('/save_live_link', methods=['POST'])
 def save_live_link():
     config = get_config()
+    old_url = config.get('live_link', '')
     new_url = request.form.get('live_link', '').strip()
     config['live_link'] = new_url
     save_config(config)
+    # Log the XML feed URL change: records old URL > new URL
+    activity_log.log_xml_change(old_url, new_url)
     return redirect(url_for('index'))
 
 @app.route('/toggle_spacer', methods=['POST'])
@@ -1193,6 +1397,8 @@ def save_output():
     
     config['output_items'] = cleaned_items
     save_config(config)
+    # Log the live output feed change: records every item currently in the feed
+    activity_log.log_feed_change(cleaned_items)
     return redirect(url_for('index'))
 
 @app.route('/save_custom', methods=['POST'])
@@ -1205,29 +1411,109 @@ def save_custom():
     
     config['custom_items'] = cleaned_items if cleaned_items else [""]
     save_config(config)
+    # Log the custom text change: records every item currently in the static list
+    activity_log.log_txt_change(cleaned_items)
     return redirect(url_for('index'))
+
+# ==============================================================================
+# RATE LIMITING & LOGIN LOCKOUT
+# (5 failed attempts within a 5-minute sliding window triggers a 5-minute lockout)
+# ==============================================================================
+MAX_FAILED_ATTEMPTS = 5
+LOCKOUT_WINDOW_SECONDS = 300      # 5 minutes
+LOCKOUT_DURATION_SECONDS = 300    # 5 minutes
+failed_login_attempts = {}
+
+def get_client_ip():
+    """Extracts client IP address, checking X-Forwarded-For if behind a proxy/Docker."""
+    if request.headers.get('X-Forwarded-For'):
+        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
+    return request.remote_addr or '127.0.0.1'
+
+def check_ip_lockout(ip):
+    """Returns remaining lockout seconds if the IP is currently locked out, else 0."""
+    now = time.time()
+    record = failed_login_attempts.get(ip)
+    if not record:
+        return 0
+    
+    # Active lockout check
+    if record.get('lockout_until', 0) > now:
+        return int(record['lockout_until'] - now) + 1
+    
+    # If lockout expired, reset
+    if record.get('lockout_until', 0) > 0 and record.get('lockout_until', 0) <= now:
+        record['lockout_until'] = 0
+        record['attempts'] = []
+        return 0
+        
+    # Prune attempts older than the 5-minute window
+    record['attempts'] = [t for t in record.get('attempts', []) if now - t < LOCKOUT_WINDOW_SECONDS]
+    return 0
+
+def record_failed_attempt(ip):
+    """Records a failed attempt timestamp for the IP. Triggers lockout if 5 attempts reached."""
+    now = time.time()
+    if ip not in failed_login_attempts:
+        failed_login_attempts[ip] = {'attempts': [], 'lockout_until': 0}
+    
+    record = failed_login_attempts[ip]
+    record['attempts'] = [t for t in record.get('attempts', []) if now - t < LOCKOUT_WINDOW_SECONDS]
+    record['attempts'].append(now)
+    
+    if len(record['attempts']) >= MAX_FAILED_ATTEMPTS:
+        record['lockout_until'] = now + LOCKOUT_DURATION_SECONDS
+        return LOCKOUT_DURATION_SECONDS
+    return 0
+
+def clear_failed_attempts(ip):
+    """Clears attempt record upon successful authentication."""
+    failed_login_attempts.pop(ip, None)
 
 @app.before_request
 def require_login():
     config = get_config()
     required_user = str(config.get("auth_username", "")).strip()
     required_pass = str(config.get("auth_password", "")).strip()
-    
-    # If credentials are configured, enforce authentication
-    if required_user and required_pass:
+    credentials_set = bool(required_user and required_pass)
+
+    # Block all routes except /setup and static files when credentials are not configured.
+    if not credentials_set:
+        if request.endpoint not in ('setup', 'static'):
+            return redirect(url_for('setup'))
+    else:
+        # Credentials are configured — require login for all routes except login/static.
         if request.endpoint not in ('login', 'static') and not session.get('logged_in'):
             return redirect(url_for('login'))
+
+@app.route('/setup')
+def setup():
+    """Shown when config.json has no credentials set. Instructs user to add them."""
+    config = get_config()
+    required_user = str(config.get("auth_username", "")).strip()
+    required_pass = str(config.get("auth_password", "")).strip()
+    # If credentials have been added since the page was last loaded, go to login.
+    if required_user and required_pass:
+        return redirect(url_for('login'))
+    return render_template_string(SETUP_TEMPLATE)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     config = get_config()
     required_user = str(config.get("auth_username", "")).strip()
     required_pass = str(config.get("auth_password", "")).strip()
-    
-    # If no credentials are set in config, allow access directly
+
+    # If credentials are still not set, send back to setup page.
     if not required_user or not required_pass:
-        session['logged_in'] = True
-        return redirect(url_for('index'))
+        return redirect(url_for('setup'))
+
+    ip = get_client_ip()
+    lockout_remaining = check_ip_lockout(ip)
+    
+    if lockout_remaining > 0:
+        mins = (lockout_remaining + 59) // 60
+        error = f"Too many failed login attempts. Access temporarily locked for {mins} minute{'s' if mins != 1 else ''} ({lockout_remaining}s remaining)."
+        return render_template_string(LOGIN_TEMPLATE, error=error, is_locked=True)
         
     error = None
     if request.method == 'POST':
@@ -1235,12 +1521,24 @@ def login():
         pwd = request.form.get('password', '')
         
         if user == required_user and pwd == required_pass:
+            clear_failed_attempts(ip)
             session['logged_in'] = True
+            # Log successful login
+            activity_log.log_login(user, ip, success=True)
             return redirect(url_for('index'))
         else:
-            error = "Invalid username or password. Please try again."
+            lockout_time = record_failed_attempt(ip)
+            # Log failed login attempt
+            activity_log.log_login(user, ip, success=False)
+            if lockout_time > 0:
+                error = "Too many failed attempts (5 attempts in 5 minutes). You are locked out for 5 minutes."
+                return render_template_string(LOGIN_TEMPLATE, error=error, is_locked=True)
+            else:
+                attempts_done = len(failed_login_attempts[ip]['attempts'])
+                attempts_left = MAX_FAILED_ATTEMPTS - attempts_done
+                error = f"Invalid username or password. ({attempts_left} attempt{'s' if attempts_left != 1 else ''} remaining before 5-minute lockout)"
             
-    return render_template_string(LOGIN_TEMPLATE, error=error)
+    return render_template_string(LOGIN_TEMPLATE, error=error, is_locked=False)
 
 @app.route('/logout')
 def logout():

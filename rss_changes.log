@@ -1,0 +1,5 @@
+12:00:00 AM 2026-08-18 [XML] Item 1: [] > [https://legacy.scoreatl.com/xml/scoreboard/hs/top/]
+12:02:30 AM 2026-08-18 [Login] username=cms, ip=[172.31.0.1], success=False
+12:02:48 AM 2026-08-18 [Login] username=cms, ip=[172.31.0.1], success=False
+12:05:13 AM 2026-08-18 [Login] username=cms, ip=[172.31.0.1], success=True
+12:06:12 AM 2026-08-18 [TXT] user changed static output to [custom box numba 1][another box we'll call him 2][this ones a 3rd box][4th box in line is here]

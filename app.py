@@ -9,6 +9,14 @@ app = Flask(__name__)
 DEFAULT_LIVE_LINK = os.environ.get('XML_URL', '')
 CONFIG_FILE = 'config.json'
 
+# ==============================================================================
+# DEFAULT CONFIGURATION
+# - live_link: XML/RSS source link. Leave empty ("") if using custom text items only.
+# - enable_spacer: Appends a blank item to the RSS feed for smooth ticker looping.
+# - auth_username & auth_password: Login credentials for the web management GUI (gui.py).
+#   IMPORTANT: Setting EITHER auth_username OR auth_password to "" (empty string)
+#   completely DISABLES login authentication, allowing open access to the GUI.
+# ==============================================================================
 DEFAULT_CONFIG = {
     "live_link": DEFAULT_LIVE_LINK,
     "enable_spacer": True,
