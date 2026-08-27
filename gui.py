@@ -604,6 +604,27 @@ HTML_TEMPLATE = """
             border-color: #0066cc;
             color: #fff;
         }
+
+        .btn-clear-all {
+            background: #401818;
+            border: 1px solid #632323;
+            color: #ff9999;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.12s ease;
+            flex-shrink: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-weight: 500;
+        }
+        .btn-clear-all:hover {
+            background: #b91c1c;
+            border-color: #ef4444;
+            color: #fff;
+        }
         
         /* Dynamic Custom Editor */
         .custom-row { 
@@ -829,7 +850,13 @@ HTML_TEMPLATE = """
                         <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.2 19.1 19.1"/></svg>
                         <span>Incoming Live Link</span>
                     </h3>
-                    <span class="item-count-badge">{{ live_items|length }} Items</span>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <button type="button" class="btn-quick-add" onclick="addAllLiveToOutput()" title="Add all live items to output" style="opacity:1; padding: 4px 10px; font-size:0.8rem;">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                            <span>Add All</span>
+                        </button>
+                        <span class="item-count-badge">{{ live_items|length }} Items</span>
+                    </div>
                 </div>
                 <form action="/save_live_link" method="POST" style="margin-bottom: 12px; display: flex; gap: 8px;">
                     <input type="url" name="live_link" class="custom-input" value="{{ live_link }}" placeholder="Enter Live XML URL..." style="font-size: 0.85rem; padding: 6px 10px;">
@@ -880,7 +907,13 @@ HTML_TEMPLATE = """
                         <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                         <span>Custom Text Feed</span>
                     </h3>
-                    <span class="item-count-badge" id="custom-count">{{ custom_items|length }} Presets</span>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <button type="button" class="btn-quick-add" onclick="addAllCustomToOutput()" title="Add all custom items to output" style="opacity:1; padding: 4px 10px; font-size:0.8rem;">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                            <span>Add All</span>
+                        </button>
+                        <span class="item-count-badge" id="custom-count">{{ custom_items|length }} Presets</span>
+                    </div>
                 </div>
                 <div class="instructions-hint">
                     Type messages, drag them to Output, or save presets.
@@ -934,7 +967,13 @@ HTML_TEMPLATE = """
                         <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
                         <span>Active Output Feed</span>
                     </h3>
-                    <span class="item-count-badge" id="output-count" style="background:#0066cc; color:#fff;">{{ output_items|length }} Active</span>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <button type="button" class="btn-clear-all" onclick="clearAllOutput()" title="Clear all items from output">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                            <span>Clear All</span>
+                        </button>
+                        <span class="item-count-badge" id="output-count" style="background:#0066cc; color:#fff;">{{ output_items|length }} Active</span>
+                    </div>
                 </div>
                 <div class="instructions-hint">
                     Drop items here from Live Feed or Custom Text. Drag to reorder, click remove to delete.
@@ -1094,6 +1133,22 @@ HTML_TEMPLATE = """
             if (badge) badge.textContent = `${count} Presets`;
         }
 
+        function addAllLiveToOutput() {
+            const cards = document.querySelectorAll('#live-items-list .draggable-card');
+            cards.forEach(card => {
+                const text = card.getAttribute('data-text');
+                if (text && text.trim()) addTextToOutput(text.trim());
+            });
+        }
+
+        function addAllCustomToOutput() {
+            const rows = document.querySelectorAll('#custom-items-container .custom-row');
+            rows.forEach(row => {
+                const input = row.querySelector('input');
+                if (input && input.value.trim()) addTextToOutput(input.value.trim());
+            });
+        }
+
         // --- Box 3: Output Box Reordering & Drop Handlers ---
         function handleOutputItemDragStart(e, el) {
             draggedElement = el;
@@ -1224,6 +1279,13 @@ HTML_TEMPLATE = """
                 card.remove();
                 updateOutputUI();
             }
+        }
+
+        function clearAllOutput() {
+            const container = document.getElementById('output-items-container');
+            const cards = container.querySelectorAll('.output-item-card');
+            cards.forEach(card => card.remove());
+            updateOutputUI();
         }
 
         function updateOutputUI() {
