@@ -71,7 +71,8 @@ def get_rss():
     if output_items is None:
         output_items = config.get("custom_items", [])
 
-    for i, item_text in enumerate(output_items):
+    for i, raw_item in enumerate(output_items):
+        item_text = raw_item.get('text', '') if isinstance(raw_item, dict) else str(raw_item)
         if not item_text or not str(item_text).strip():
             continue
             
