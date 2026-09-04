@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import threading
 import xml.etree.ElementTree as ET
 import urllib.request
 # pyrefly: ignore [missing-import]
@@ -11,6 +12,7 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'rss-converter-gui-secret-key-999')
 CONFIG_FILE = 'config.json'
 DEFAULT_LIVE_LINK = os.environ.get('XML_URL', '')
+config_lock = threading.Lock()
 
 # ==============================================================================
 # DEFAULT CONFIGURATION
@@ -34,43 +36,49 @@ _AUTH_KEYS = {"auth_username", "auth_password"}
 def save_config(config):
     """Saves config to disk. Auth fields are always stripped from what gets written
     and re-read from the existing file so the app can never change them."""
-    # Pull current auth off disk (if any) so they survive the write.
-    preserved = {}
-    try:
-        with open(CONFIG_FILE, 'r') as f:
-            on_disk = json.load(f)
-        preserved = {k: on_disk[k] for k in _AUTH_KEYS if k in on_disk}
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        pass
+    with config_lock:
+        # Pull current auth off disk (if any) so they survive the write.
+        preserved = {}
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                on_disk = json.load(f)
+            preserved = {k: on_disk[k] for k in _AUTH_KEYS if k in on_disk}
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            pass
 
-    # Strip auth from whatever was passed in, then put disk values back.
-    out = {k: v for k, v in config.items() if k not in _AUTH_KEYS}
-    out.update(preserved)
+        # Strip auth from whatever was passed in, then put disk values back.
+        out = {k: v for k, v in config.items() if k not in _AUTH_KEYS}
+        out.update(preserved)
 
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(out, f, indent=2)
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(out, f, indent=2)
 
 def get_config():
-    if not os.path.exists(CONFIG_FILE):
-        cfg = DEFAULT_CONFIG.copy()
-        try:
-            save_config(cfg)
-        except OSError:
-            pass
-        return cfg
-    try:
-        with open(CONFIG_FILE, 'r') as f:
-            cfg = json.load(f)
-            if "live_link" not in cfg:
-                cfg["live_link"] = DEFAULT_LIVE_LINK
+    with config_lock:
+        if not os.path.exists(CONFIG_FILE):
+            cfg = DEFAULT_CONFIG.copy()
+            try:
+                out = {k: v for k, v in cfg.items() if k not in _AUTH_KEYS}
+                with open(CONFIG_FILE, 'w') as f:
+                    json.dump(out, f, indent=2)
+            except OSError:
+                pass
             return cfg
-    except (FileNotFoundError, json.JSONDecodeError):
-        cfg = DEFAULT_CONFIG.copy()
         try:
-            save_config(cfg)
-        except OSError:
-            pass
-        return cfg
+            with open(CONFIG_FILE, 'r') as f:
+                cfg = json.load(f)
+                if "live_link" not in cfg:
+                    cfg["live_link"] = DEFAULT_LIVE_LINK
+                return cfg
+        except (FileNotFoundError, json.JSONDecodeError):
+            cfg = DEFAULT_CONFIG.copy()
+            try:
+                out = {k: v for k, v in cfg.items() if k not in _AUTH_KEYS}
+                with open(CONFIG_FILE, 'w') as f:
+                    json.dump(out, f, indent=2)
+            except OSError:
+                pass
+            return cfg
 
 def node_to_dict(node):
     """Recursively converts XML nodes into a clean dictionary structure."""
@@ -472,6 +480,35 @@ HTML_TEMPLATE = """
         .btn-success:hover { background: #15803d; }
         .btn-danger { background: #dc2626; color: #fff; }
         .btn-danger:hover { background: #b91c1c; }
+        
+        /* Auto-Refresh Status & Animations */
+        .cycle-pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #22c55e;
+            box-shadow: 0 0 8px #22c55e;
+            display: inline-block;
+            flex-shrink: 0;
+            animation: pulse-dot-anim 1.8s infinite;
+        }
+        .cycle-pulse-dot.error {
+            background-color: #ef4444;
+            box-shadow: 0 0 8px #ef4444;
+            animation: none;
+        }
+        @keyframes pulse-dot-anim {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
+            70% { transform: scale(1.15); box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+        }
+        .spin {
+            animation: spin-anim 0.7s linear infinite;
+        }
+        @keyframes spin-anim {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
         
         .controls { display: flex; gap: 10px; align-items: center; }
         
@@ -915,10 +952,11 @@ HTML_TEMPLATE = """
                         {% endif %}
                     </button>
                 </form>
-                <a href="/" class="btn" title="Refresh Live Data" onclick="refreshLiveItems(true); return false;">
-                    <svg class="icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-                    <span>Refresh Feeds</span>
-                </a>
+                <button type="button" class="btn" id="btn-restart-cycle" title="Auto-refreshing in background every 15s. Click to restart/force cycle immediately." onclick="restartRefreshCycle();" style="display: inline-flex; align-items: center; gap: 8px;">
+                    <span class="cycle-pulse-dot" id="cycle-pulse-dot" title="Background Auto-Refresh Active"></span>
+                    <svg class="icon" id="cycle-refresh-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                    <span id="cycle-status-text">Restart Cycle</span>
+                </button>
                 <a href="/logout" class="btn btn-danger" style="padding: 10px 14px; font-size: 0.85rem;" title="Sign out of control panel">
                     <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
                     <span>Logout</span>
@@ -1731,6 +1769,8 @@ HTML_TEMPLATE = """
         }
 
         let isFetchingLive = false;
+        let refreshCycleInterval = null;
+
         async function refreshLiveItems(isManual = false) {
             if (isFetchingLive) return;
             isFetchingLive = true;
@@ -1744,10 +1784,59 @@ HTML_TEMPLATE = """
                 if (data && data.items_by_id) {
                     updateLiveOutputCards(data.items_by_id);
                 }
+                updateCycleStatusUI(true, data.error);
             } catch (err) {
                 console.error('Error refreshing live items:', err);
+                updateCycleStatusUI(false, err.message);
             } finally {
                 isFetchingLive = false;
+            }
+        }
+
+        async function restartRefreshCycle() {
+            const btnText = document.getElementById('cycle-status-text');
+            const btnIcon = document.getElementById('cycle-refresh-icon');
+            const dot = document.getElementById('cycle-pulse-dot');
+            
+            if (btnIcon) btnIcon.classList.add('spin');
+            if (btnText) btnText.textContent = 'Restarting...';
+
+            // Reset client fetching lock & interval timer
+            isFetchingLive = false;
+            if (refreshCycleInterval) {
+                clearInterval(refreshCycleInterval);
+            }
+            refreshCycleInterval = setInterval(refreshLiveItems, 15000);
+
+            try {
+                // Signal server background thread to immediately trigger & wake up
+                await fetch('/api/restart_cycle', { method: 'POST' });
+                await refreshLiveItems(true);
+                
+                if (btnText) btnText.textContent = 'Cycle Active ✓';
+                if (dot) dot.classList.remove('error');
+                setTimeout(() => {
+                    if (btnText) btnText.textContent = 'Restart Cycle';
+                }, 2500);
+            } catch (err) {
+                console.error('Failed to restart background cycle:', err);
+                if (btnText) btnText.textContent = 'Retry Restart';
+                if (dot) dot.classList.add('error');
+            } finally {
+                if (btnIcon) btnIcon.classList.remove('spin');
+            }
+        }
+
+        function updateCycleStatusUI(isHealthy, errorMsg) {
+            const dot = document.getElementById('cycle-pulse-dot');
+            if (dot) {
+                if (!isHealthy || errorMsg) {
+                    dot.classList.add('error');
+                    dot.title = 'Refresh error: ' + (errorMsg || 'Connection failed');
+                } else {
+                    dot.classList.remove('error');
+                    dot.title = 'Background Auto-Refresh Active (every 15s)';
+                }
             }
         }
 
@@ -1765,7 +1854,7 @@ HTML_TEMPLATE = """
             } catch(e) {}
 
             // Automatically refresh live feed data every 15 seconds
-            setInterval(refreshLiveItems, 15000);
+            refreshCycleInterval = setInterval(refreshLiveItems, 15000);
         });
     </script>
 </body>
@@ -1839,6 +1928,154 @@ def fetch_live_data(live_link):
 
     return items, items_by_id, error
 
+def resolve_live_output_items(raw_output_items, live_items, items_by_id):
+    """
+    Resolves output items against the latest live data.
+    Returns (updated_output_items, has_changed).
+    """
+    updated_items = []
+    has_changed = False
+
+    if raw_output_items is None:
+        raw_output_items = []
+
+    for it in raw_output_items:
+        if isinstance(it, dict):
+            src = it.get("source", "custom")
+            item_id = it.get("id", "")
+            current_text = it.get("text", "")
+            resolved_text = current_text
+
+            if src == "live":
+                if item_id and item_id in items_by_id:
+                    resolved_text = items_by_id[item_id]
+                else:
+                    for live_it in live_items:
+                        lid = live_it.get('id', '')
+                        ltitle = live_it.get('title', '')
+                        parts = lid.split('|')
+                        if (len(parts) == 2 and parts[0] in current_text and parts[1] in current_text) or \
+                           current_text.strip() == ltitle.strip() or current_text.strip() in ltitle or ltitle in current_text.strip():
+                            item_id = lid
+                            resolved_text = items_by_id.get(item_id, current_text)
+                            break
+
+            if resolved_text != current_text:
+                has_changed = True
+
+            updated_items.append({"source": src, "id": item_id, "text": resolved_text})
+
+        elif isinstance(it, str):
+            matched_id = None
+            resolved_text = it.strip()
+            for live_it in live_items:
+                lid = live_it.get('id', '')
+                ltitle = live_it.get('title', '')
+                parts = lid.split('|')
+                if len(parts) == 2 and parts[0] in it and parts[1] in it:
+                    matched_id = lid
+                    resolved_text = items_by_id.get(matched_id, it.strip())
+                    break
+                elif it.strip() == ltitle.strip() or it.strip() in ltitle or ltitle in it.strip():
+                    matched_id = lid
+                    resolved_text = items_by_id.get(matched_id, it.strip())
+                    break
+
+            if resolved_text != it.strip():
+                has_changed = True
+
+            if matched_id:
+                updated_items.append({"source": "live", "id": matched_id, "text": resolved_text})
+            else:
+                updated_items.append({"source": "custom", "id": "", "text": resolved_text})
+
+    return updated_items, has_changed
+
+# ==============================================================================
+# BACKGROUND AUTO-REFRESH WORKER
+# Runs 24/7 in the background to keep output_items updated with live data.
+# ==============================================================================
+BACKGROUND_REFRESH_INTERVAL = 15  # seconds
+cycle_status_data = {
+    "is_running": True,
+    "last_refresh": None,
+    "last_error": None,
+    "refresh_count": 0
+}
+_refresh_event = threading.Event()
+
+def run_single_refresh_cycle():
+    """Performs one refresh cycle of live data and updates config.json if needed."""
+    global cycle_status_data
+    try:
+        config = get_config()
+        live_link = config.get("live_link") or DEFAULT_LIVE_LINK
+        if not live_link or not live_link.strip():
+            cycle_status_data["last_refresh"] = time.time()
+            cycle_status_data["last_error"] = None
+            return {"ok": True, "updated": False, "items_count": 0}
+
+        live_items, items_by_id, error = fetch_live_data(live_link)
+        if error:
+            cycle_status_data["last_error"] = error
+            return {"ok": False, "error": error}
+
+        activity_log.log_live_items_change([it['title'] for it in live_items])
+
+        raw_output_items = config.get("output_items", [])
+        updated_output_items, has_changed = resolve_live_output_items(raw_output_items, live_items, items_by_id)
+
+        if has_changed:
+            config['output_items'] = updated_output_items
+            save_config(config)
+            activity_log.log_feed_change([it['text'] for it in updated_output_items if it.get('text')])
+
+        cycle_status_data["last_refresh"] = time.time()
+        cycle_status_data["last_error"] = None
+        cycle_status_data["refresh_count"] += 1
+        return {"ok": True, "updated": has_changed, "items_count": len(live_items)}
+    except Exception as e:
+        cycle_status_data["last_error"] = str(e)
+        return {"ok": False, "error": str(e)}
+
+def background_refresh_worker():
+    """Background daemon thread that runs continuous refresh cycles."""
+    while True:
+        run_single_refresh_cycle()
+        _refresh_event.wait(timeout=BACKGROUND_REFRESH_INTERVAL)
+        _refresh_event.clear()
+
+_bg_thread_started = False
+def ensure_background_worker_started():
+    global _bg_thread_started
+    if not _bg_thread_started:
+        _bg_thread_started = True
+        bg_thread = threading.Thread(target=background_refresh_worker, daemon=True, name="FeedRefreshWorker")
+        bg_thread.start()
+
+ensure_background_worker_started()
+
+@app.route('/api/restart_cycle', methods=['POST', 'GET'])
+def api_restart_cycle():
+    """Triggers an immediate background refresh cycle and wakes the worker thread."""
+    _refresh_event.set()
+    res = run_single_refresh_cycle()
+    return jsonify({
+        "ok": True,
+        "cycle_status": cycle_status_data,
+        "result": res
+    })
+
+@app.route('/api/cycle_status')
+def api_cycle_status():
+    return jsonify({
+        "is_running": cycle_status_data["is_running"],
+        "last_refresh": cycle_status_data["last_refresh"],
+        "last_error": cycle_status_data["last_error"],
+        "refresh_count": cycle_status_data["refresh_count"],
+        "interval_seconds": BACKGROUND_REFRESH_INTERVAL
+    })
+
 @app.route('/api/live_items')
 def api_live_items():
     config = get_config()
@@ -1849,7 +2086,8 @@ def api_live_items():
         "live_items": live_items,
         "items_by_id": items_by_id,
         "error": error,
-        "count": len(live_items)
+        "count": len(live_items),
+        "cycle_status": cycle_status_data
     })
 
 @app.route('/')
@@ -1871,41 +2109,8 @@ def index():
     # Log the live feed content the first time it's fetched and whenever it changes.
     activity_log.log_live_items_change([it['title'] for it in live_items])
 
-    # Resolve output items (dicts or legacy strings)
-    output_items = []
-    for it in raw_output_items:
-        if isinstance(it, dict):
-            src = it.get("source", "custom")
-            item_id = it.get("id", "")
-            current_text = it.get("text", "")
-            if src == "live" and item_id and item_id in items_by_id:
-                resolved_text = items_by_id[item_id]
-            else:
-                resolved_text = current_text
-            output_items.append({"source": src, "id": item_id, "text": resolved_text})
-        elif isinstance(it, str):
-            # Legacy string from config.json: match against live matchup
-            matched_id = None
-            resolved_text = it.strip()
-            for live_it in live_items:
-                lid = live_it['id']
-                ltitle = live_it['title']
-                parts = lid.split('|')
-                # 1. Match by teams: e.g. "Glynn Academy" and "Camden County" in text
-                if len(parts) == 2 and parts[0] in it and parts[1] in it:
-                    matched_id = lid
-                    resolved_text = items_by_id.get(matched_id, it.strip())
-                    break
-                # 2. Match by exact or partial title
-                elif it.strip() == ltitle.strip() or it.strip() in ltitle or ltitle in it.strip():
-                    matched_id = lid
-                    resolved_text = items_by_id.get(matched_id, it.strip())
-                    break
-
-            if matched_id:
-                output_items.append({"source": "live", "id": matched_id, "text": resolved_text})
-            else:
-                output_items.append({"source": "custom", "id": "", "text": resolved_text})
+    # Resolve output items
+    output_items, _ = resolve_live_output_items(raw_output_items, live_items, items_by_id)
 
     # Generate combined ticker preview from output_items
     valid_texts = [it["text"].strip() for it in output_items if it.get("text") and it["text"].strip()]
@@ -2111,4 +2316,5 @@ def logout():
     return redirect(url_for('login'))
 
 if __name__ == '__main__':
+    ensure_background_worker_started()
     app.run(host='0.0.0.0', port=5001)
