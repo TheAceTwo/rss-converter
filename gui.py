@@ -7,6 +7,9 @@ import urllib.request
 # pyrefly: ignore [missing-import]
 from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
 import logger as activity_log
+from output_resolver import resolve_output_items, ticker_text
+import propresenter
+from watcher import TickerWatcher
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'rss-converter-gui-secret-key-999')
@@ -29,6 +32,55 @@ DEFAULT_CONFIG = {
     "custom_items": [""],
     "output_items": []
 }
+
+# ------------------------------------------------------------------------------
+# ProPresenter integration settings. Stored under config["propresenter"].
+# enabled:               master switch for the background auto-trigger.
+# host / port:           the ProPresenter machine (Settings > Network).
+# prop_id / prop_name:   the prop that holds the RSS scrolling text.
+# refresh_mode:          "trigger" | "clear_trigger" | "fade_trigger" (see propresenter.py).
+# fade_seconds:          transition duration used by fade_trigger.
+# ------------------------------------------------------------------------------
+REFRESH_MODES = ("trigger", "clear_trigger", "fade_trigger")
+PROPRESENTER_DEFAULTS = {
+    "enabled": False,
+    "host": "",
+    "port": 1025,
+    "prop_id": "",
+    "prop_name": "",
+    "refresh_mode": "trigger",
+    "fade_seconds": 0.6,
+}
+DEFAULT_CONFIG["propresenter"] = dict(PROPRESENTER_DEFAULTS)
+
+
+def _as_bool(value):
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def get_propresenter_settings(config):
+    """Returns the propresenter block merged over defaults with types coerced."""
+    raw = config.get("propresenter") or {}
+    out = dict(PROPRESENTER_DEFAULTS)
+    out["enabled"] = _as_bool(raw.get("enabled", out["enabled"]))
+    out["host"] = str(raw.get("host", out["host"]) or "").strip()
+    try:
+        out["port"] = int(raw.get("port", out["port"]))
+    except (TypeError, ValueError):
+        out["port"] = PROPRESENTER_DEFAULTS["port"]
+    out["prop_id"] = str(raw.get("prop_id", out["prop_id"]) or "").strip()
+    out["prop_name"] = str(raw.get("prop_name", out["prop_name"]) or "").strip()
+    mode = str(raw.get("refresh_mode", out["refresh_mode"]) or "").strip()
+    out["refresh_mode"] = mode if mode in REFRESH_MODES else PROPRESENTER_DEFAULTS["refresh_mode"]
+    try:
+        fade = float(raw.get("fade_seconds", out["fade_seconds"]))
+        out["fade_seconds"] = fade if 0 < fade <= 10 else PROPRESENTER_DEFAULTS["fade_seconds"]
+    except (TypeError, ValueError):
+        out["fade_seconds"] = PROPRESENTER_DEFAULTS["fade_seconds"]
+    return out
+
 
 # Auth fields are never written by the app — only by the user editing config.json directly.
 _AUTH_KEYS = {"auth_username", "auth_password"}
@@ -90,6 +142,19 @@ def node_to_dict(node):
         else:
             data[child.tag] = node_to_dict(child)
     return data
+
+
+# The watcher is created at import so routes can call notify_change(), but the
+# polling thread only starts in __main__ (see bottom of file). Tests import
+# this module and must not spawn threads.
+ticker_watcher = TickerWatcher(
+    get_config=get_config,
+    save_config=save_config,
+    fetch_live_data=lambda link: fetch_live_data(link),
+    get_settings=get_propresenter_settings,
+    poll_seconds=15,
+    debounce_seconds=3.0,
+)
 
 LOGIN_TEMPLATE = """
 <!DOCTYPE html>
@@ -929,6 +994,24 @@ HTML_TEMPLATE = """
             box-shadow: 0 0 8px rgba(0, 136, 255, 0.7);
         }
         @keyframes ticker { 0% { transform: translate3d(0, 0, 0); } 100% { transform: translate3d(-100%, 0, 0); } }
+        /* ProPresenter integration card */
+        .pp-card { background: #1b1b1b; border: 1px solid #2e2e2e; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+        .pp-card-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 0.9rem; font-weight: 600; color: #fff; }
+        .pp-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+        .pp-row .custom-input { font-size: 0.85rem; padding: 6px 10px; }
+        .pp-row select.custom-input { flex: 1; min-width: 0; }
+        .pp-port { max-width: 90px; }
+        .pp-toggles { display: flex; gap: 14px; font-size: 0.8rem; color: #bdbdbd; margin-bottom: 8px; }
+        .pp-toggles label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+        .pp-modes { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+        .pp-mode { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: #bdbdbd; padding: 6px 8px; border: 1px solid #2e2e2e; border-radius: 6px; cursor: pointer; }
+        .pp-mode:has(input:checked) { border-color: #0066cc; background: rgba(0,102,204,0.12); color: #fff; }
+        .pp-mode small { color: #8a8a8a; margin-left: auto; }
+        .pp-fade { width: 64px; font-size: 0.8rem; padding: 3px 6px; }
+        .pp-status { font-size: 0.75rem; min-height: 1.1em; color: #9a9a9a; }
+        .pp-status.ok { color: #4ade80; }
+        .pp-status.err { color: #f87171; }
+        .btn-sm { padding: 6px 12px; font-size: 0.8rem; white-space: nowrap; }
     </style>
 </head>
 <body>
@@ -993,6 +1076,49 @@ HTML_TEMPLATE = """
                         <span>Save URL</span>
                     </button>
                 </form>
+
+                <!-- ProPresenter auto-trigger -->
+                <div class="pp-card">
+                    <div class="pp-card-title">
+                        <span>ProPresenter Auto-Refresh</span>
+                        <span class="item-count-badge" id="pp-badge">Off</span>
+                    </div>
+                    <div class="pp-row">
+                        <input type="text" id="pp-host" class="custom-input" placeholder="ProPresenter IP (e.g. 192.168.1.50)" style="flex:1;">
+                        <input type="number" id="pp-port" class="custom-input pp-port" placeholder="Port" min="1" max="65535">
+                        <button type="button" id="pp-test-btn" class="btn btn-sm" onclick="ppTestConnection()" title="Connect to ProPresenter and list props">Test Connection</button>
+                    </div>
+                    <div class="pp-row">
+                        <select id="pp-prop" class="custom-input" title="Prop that holds the RSS scrolling text">
+                            <option value="">— run Test Connection to list props —</option>
+                        </select>
+                    </div>
+                    <div class="pp-modes" title="How ProPresenter reloads the ticker. Pick one, press Trigger Now to preview it live, then Save.">
+                        <label class="pp-mode">
+                            <input type="radio" name="pp-mode" value="trigger" checked>
+                            <span>Trigger only</span>
+                            <small>restarts scroll in place</small>
+                        </label>
+                        <label class="pp-mode">
+                            <input type="radio" name="pp-mode" value="clear_trigger">
+                            <span>Clear, then trigger</span>
+                            <small>ticker blinks off and back (like manual)</small>
+                        </label>
+                        <label class="pp-mode">
+                            <input type="radio" name="pp-mode" value="fade_trigger">
+                            <span>Fade, then trigger</span>
+                            <small>cross-fade over <input type="number" id="pp-fade-seconds" class="custom-input pp-fade" value="0.6" min="0.1" max="10" step="0.1"> s</small>
+                        </label>
+                    </div>
+                    <div class="pp-toggles">
+                        <label><input type="checkbox" id="pp-enabled"> Auto-trigger on changes</label>
+                    </div>
+                    <div class="pp-row" style="margin-bottom:4px;">
+                        <button type="button" id="pp-save-btn" class="btn btn-sm" onclick="ppSaveSettings()">Save</button>
+                        <button type="button" id="pp-trigger-btn" class="btn btn-sm" onclick="ppTriggerNow()" style="background:#1b6329; border:1px solid #2b8a3e;" title="Send a trigger to ProPresenter right now using the mode selected above (does not save)">Trigger Now</button>
+                        <span class="pp-status" id="pp-status"></span>
+                    </div>
+                </div>
 
                 <div class="instructions-hint">
                     Drag any item box below into the <strong>Output Feed</strong> on the right.
@@ -1714,7 +1840,7 @@ HTML_TEMPLATE = """
             let anyChanged = false;
 
             cards.forEach(card => {
-                const source = card.getAttribute('data-source');
+                let source = card.getAttribute('data-source');
                 let id = card.getAttribute('data-id');
                 const currentText = card.getAttribute('data-text') || '';
 
@@ -1793,6 +1919,130 @@ HTML_TEMPLATE = """
             }
         }
 
+        // --- ProPresenter integration ---
+        function ppSetStatus(msg, kind) {
+            const el = document.getElementById('pp-status');
+            el.textContent = msg || '';
+            el.className = 'pp-status' + (kind ? ' ' + kind : '');
+        }
+
+        function ppRenderBadge(settings, lastError) {
+            const badge = document.getElementById('pp-badge');
+            if (!settings.enabled) { badge.textContent = 'Off'; badge.style.background = ''; badge.style.color = ''; return; }
+            if (lastError) { badge.textContent = 'Error'; badge.style.background = '#611e1e'; badge.style.color = '#fff'; return; }
+            badge.textContent = 'On'; badge.style.background = '#1b6329'; badge.style.color = '#fff';
+        }
+
+        function ppFillPropSelect(props, selectedId, selectedName) {
+            const sel = document.getElementById('pp-prop');
+            sel.innerHTML = '';
+            if (!props || props.length === 0) {
+                const opt = document.createElement('option');
+                opt.value = ''; opt.textContent = '— no props found —';
+                sel.appendChild(opt);
+                return;
+            }
+            props.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.uuid || p.name;
+                opt.dataset.name = p.name;
+                opt.textContent = p.name + (p.is_active ? '  (live)' : '');
+                if ((selectedId && opt.value === selectedId) || (!selectedId && selectedName && p.name === selectedName)) opt.selected = true;
+                sel.appendChild(opt);
+            });
+        }
+
+        function ppGetMode() {
+            const checked = document.querySelector('input[name="pp-mode"]:checked');
+            return checked ? checked.value : 'trigger';
+        }
+
+        function ppSetMode(mode) {
+            const radio = document.querySelector('input[name="pp-mode"][value="' + mode + '"]');
+            if (radio) radio.checked = true;
+        }
+
+        function ppGetFadeSeconds() {
+            const v = parseFloat(document.getElementById('pp-fade-seconds').value);
+            return (isFinite(v) && v > 0) ? v : 0.6;
+        }
+
+        async function ppLoadStatus() {
+            try {
+                const res = await fetch('/api/propresenter/status');
+                if (!res.ok) return;
+                const data = await res.json();
+                const s = data.settings;
+                document.getElementById('pp-host').value = s.host || '';
+                document.getElementById('pp-port').value = s.port || 1025;
+                document.getElementById('pp-enabled').checked = !!s.enabled;
+                ppSetMode(s.refresh_mode || 'trigger');
+                document.getElementById('pp-fade-seconds').value = s.fade_seconds || 0.6;
+                if (s.prop_id || s.prop_name) {
+                    ppFillPropSelect([{ uuid: s.prop_id, name: s.prop_name || s.prop_id, is_active: false }], s.prop_id, s.prop_name);
+                }
+                ppRenderBadge(s, data.last_error);
+                if (data.last_error) ppSetStatus('Last error: ' + data.last_error, 'err');
+                else if (data.last_trigger_at) ppSetStatus('Last trigger ' + new Date(data.last_trigger_at * 1000).toLocaleTimeString(), 'ok');
+            } catch (e) { console.error('ppLoadStatus', e); }
+        }
+
+        async function ppTestConnection() {
+            const host = document.getElementById('pp-host').value.trim();
+            const port = document.getElementById('pp-port').value.trim();
+            if (!host) { ppSetStatus('Enter the ProPresenter IP first.', 'err'); return; }
+            ppSetStatus('Connecting…');
+            try {
+                const res = await fetch('/api/propresenter/props?host=' + encodeURIComponent(host) + '&port=' + encodeURIComponent(port));
+                const data = await res.json();
+                if (!data.ok) { ppSetStatus(data.error, 'err'); return; }
+                const sel = document.getElementById('pp-prop');
+                const currentId = sel.value;
+                ppFillPropSelect(data.props, currentId, null);
+                ppSetStatus('Connected. ' + data.props.length + ' prop(s) found. Pick the ticker prop and Save.', 'ok');
+            } catch (e) { ppSetStatus('Request failed: ' + e, 'err'); }
+        }
+
+        async function ppSaveSettings() {
+            const sel = document.getElementById('pp-prop');
+            const opt = sel.options[sel.selectedIndex];
+            const body = {
+                host: document.getElementById('pp-host').value.trim(),
+                port: parseInt(document.getElementById('pp-port').value, 10) || 1025,
+                prop_id: sel.value || '',
+                prop_name: (opt && opt.dataset && opt.dataset.name) ? opt.dataset.name : '',
+                enabled: document.getElementById('pp-enabled').checked,
+                refresh_mode: ppGetMode(),
+                fade_seconds: ppGetFadeSeconds(),
+            };
+            ppSetStatus('Saving…');
+            try {
+                const res = await fetch('/api/propresenter/settings', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+                });
+                const data = await res.json();
+                if (!data.ok) { ppSetStatus('Save failed.', 'err'); return; }
+                ppRenderBadge(data.settings, '');
+                ppSetStatus('Saved.', 'ok');
+            } catch (e) { ppSetStatus('Save failed: ' + e, 'err'); }
+        }
+
+        async function ppTriggerNow() {
+            // Uses the mode currently selected in the radios, even if not saved yet,
+            // so the three modes can be compared live before committing to one.
+            const mode = ppGetMode();
+            ppSetStatus('Triggering (' + mode.replace('_', ' + ') + ')…');
+            try {
+                const res = await fetch('/api/propresenter/trigger', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ refresh_mode: mode, fade_seconds: ppGetFadeSeconds() })
+                });
+                const data = await res.json();
+                if (!data.ok) { ppSetStatus(data.error, 'err'); return; }
+                ppSetStatus('Trigger sent via ' + data.refresh_mode + ' at ' + new Date().toLocaleTimeString() + '. Press Save to keep this mode.', 'ok');
+            } catch (e) { ppSetStatus('Trigger failed: ' + e, 'err'); }
+        }
+
         async function restartRefreshCycle() {
             const btnText = document.getElementById('cycle-status-text');
             const btnIcon = document.getElementById('cycle-refresh-icon');
@@ -1842,6 +2092,7 @@ HTML_TEMPLATE = """
 
         // Initialize UI numbers on page load and start 15s auto-refresh
         document.addEventListener('DOMContentLoaded', () => {
+            ppLoadStatus();
             updateOutputUI();
             updateCustomCount();
 
@@ -2109,12 +2360,8 @@ def index():
     # Log the live feed content the first time it's fetched and whenever it changes.
     activity_log.log_live_items_change([it['title'] for it in live_items])
 
-    # Resolve output items
-    output_items, _ = resolve_live_output_items(raw_output_items, live_items, items_by_id)
-
-    # Generate combined ticker preview from output_items
-    valid_texts = [it["text"].strip() for it in output_items if it.get("text") and it["text"].strip()]
-    combined_ticker = "  |  ".join(valid_texts)
+    output_items = resolve_output_items(raw_output_items, live_items, items_by_id)
+    combined_ticker = ticker_text(output_items)
 
     return render_template_string(
         HTML_TEMPLATE, 
@@ -2169,6 +2416,7 @@ def api_save_output():
     config['output_items'] = cleaned_items
     save_config(config)
     activity_log.log_feed_change(log_text_items)
+    ticker_watcher.notify_change()
     return jsonify({"ok": True, "count": len(cleaned_items)})
 
 @app.route('/save_custom', methods=['POST'])
@@ -2183,7 +2431,81 @@ def save_custom():
     save_config(config)
     # Log the custom text change: records every item currently in the static list
     activity_log.log_txt_change(cleaned_items)
+    ticker_watcher.notify_change()
     return redirect(url_for('index'))
+
+# ==============================================================================
+# PROPRESENTER INTEGRATION ROUTES
+# ==============================================================================
+@app.route('/api/propresenter/status')
+def api_propresenter_status():
+    settings = get_propresenter_settings(get_config())
+    return jsonify({
+        "settings": settings,
+        "last_trigger_at": ticker_watcher.last_status["last_trigger_at"],
+        "last_error": ticker_watcher.last_status["last_error"],
+    })
+
+
+@app.route('/api/propresenter/settings', methods=['POST'])
+def api_propresenter_settings():
+    data = request.get_json(silent=True) or {}
+    config = get_config()
+    current = get_propresenter_settings(config)
+    merged = dict(current)
+    for key in PROPRESENTER_DEFAULTS:
+        if key in data:
+            merged[key] = data[key]
+    settings = get_propresenter_settings({"propresenter": merged})
+    config["propresenter"] = settings
+    save_config(config)
+    activity_log.log_propresenter("settings saved: host={} port={} prop={} enabled={} mode={} fade={}s".format(
+        settings["host"], settings["port"], settings["prop_name"] or settings["prop_id"],
+        settings["enabled"], settings["refresh_mode"], settings["fade_seconds"]))
+    return jsonify({"ok": True, "settings": settings})
+
+
+@app.route('/api/propresenter/props')
+def api_propresenter_props():
+    saved = get_propresenter_settings(get_config())
+    host = (request.args.get('host') or saved["host"]).strip()
+    port = request.args.get('port') or saved["port"]
+    try:
+        props = propresenter.list_props(host, port)
+    except propresenter.ProPresenterError as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
+    return jsonify({"ok": True, "props": props})
+
+
+@app.route('/api/propresenter/trigger', methods=['POST'])
+def api_propresenter_trigger():
+    """Manual 'Trigger Now'. Optional JSON body {"refresh_mode": ..., "fade_seconds": ...}
+    overrides the saved mode for this one press so the three modes can be compared
+    live without saving each time."""
+    settings = get_propresenter_settings(get_config())
+    override = request.get_json(silent=True) or {}
+    if override:
+        merged = dict(settings)
+        for key in ("refresh_mode", "fade_seconds"):
+            if key in override:
+                merged[key] = override[key]
+        settings = get_propresenter_settings({"propresenter": merged})
+    prop = settings["prop_id"] or settings["prop_name"]
+    if not prop:
+        return jsonify({"ok": False, "error": "No prop selected. Use Test Connection and pick the ticker prop."}), 502
+    try:
+        propresenter.trigger_prop(settings["host"], settings["port"], prop,
+                                  mode=settings["refresh_mode"], fade_seconds=settings["fade_seconds"])
+    except propresenter.ProPresenterError as e:
+        ticker_watcher.last_status["last_error"] = str(e)
+        activity_log.log_propresenter("manual trigger FAILED ({}): {}".format(settings["refresh_mode"], e))
+        return jsonify({"ok": False, "error": str(e)}), 502
+    ticker_watcher.last_status["last_trigger_at"] = time.time()
+    ticker_watcher.last_status["last_error"] = ""
+    activity_log.log_propresenter("manual trigger of prop {} via {}".format(
+        settings["prop_name"] or prop, settings["refresh_mode"]))
+    return jsonify({"ok": True, "refresh_mode": settings["refresh_mode"]})
+
 
 # ==============================================================================
 # RATE LIMITING & LOGIN LOCKOUT
@@ -2317,4 +2639,5 @@ def logout():
 
 if __name__ == '__main__':
     ensure_background_worker_started()
+    ticker_watcher.start()
     app.run(host='0.0.0.0', port=5001)
