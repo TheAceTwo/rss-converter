@@ -1,6 +1,9 @@
 import os
 import json
+import hashlib
+import html
 import xml.etree.ElementTree as ET
+from email.utils import formatdate
 # pyrefly: ignore [missing-import]
 from flask import Flask, Response
 
@@ -59,13 +62,14 @@ def get_config():
 def get_rss():
     config = get_config()
     source_url = config.get("live_link") or DEFAULT_LIVE_LINK
-    
-    # Build base RSS 2.0 structure
+
     rss = ET.Element("rss", version="2.0")
     channel = ET.SubElement(rss, "channel")
     ET.SubElement(channel, "title").text = "Dynamic RSS Feed"
     ET.SubElement(channel, "link").text = source_url or "http://localhost:5000/rss"
     ET.SubElement(channel, "description").text = "Live dynamic feed conversion"
+    ET.SubElement(channel, "lastBuildDate").text = formatdate(usegmt=True)
+    ET.SubElement(channel, "ttl").text = "1"
 
     output_items = config.get("output_items")
     if output_items is None:
@@ -73,18 +77,25 @@ def get_rss():
 
     for i, raw_item in enumerate(output_items):
         item_text = raw_item.get('text', '') if isinstance(raw_item, dict) else str(raw_item)
-        if not item_text or not str(item_text).strip():
+        item_text = str(item_text).strip()
+        if not item_text:
             continue
-            
+
         item = ET.SubElement(channel, "item")
-        ET.SubElement(item, "title").text = str(item_text).strip()
+        ET.SubElement(item, "title").text = item_text
         ET.SubElement(item, "link").text = f"{source_url}#item_{i}" if source_url else f"#item_{i}"
-        
-        html_desc = f"<h3>{str(item_text).strip()}</h3><p>Active Output Feed Item</p>"
-        desc_element = ET.SubElement(item, "description")
-        desc_element.text = f"<![CDATA[{html_desc}]]>"
-        
-        ET.SubElement(item, "guid").text = f"output_item_{i}"
+
+        # Description is HTML *as text*: ElementTree escapes < > & so readers
+        # decode it back to real HTML. The old CDATA string hack double-escaped it.
+        ET.SubElement(item, "description").text = (
+            f"<h3>{html.escape(item_text)}</h3><p>Active Output Feed Item</p>"
+        )
+
+        # GUID depends on position AND text so a changed score is a "new" item
+        # to any reader that de-duplicates on guid.
+        digest = hashlib.sha1(f"{i}|{item_text}".encode("utf-8")).hexdigest()[:12]
+        guid = ET.SubElement(item, "guid", isPermaLink="false")
+        guid.text = f"item-{digest}"
 
     # ==========================================
     # LOOP SPACER INJECTION
@@ -93,13 +104,14 @@ def get_rss():
         spacer_item = ET.SubElement(channel, "item")
         ET.SubElement(spacer_item, "title").text = "\u00A0"
         ET.SubElement(spacer_item, "link").text = f"{source_url}#spacer" if source_url else "#spacer"
-        ET.SubElement(spacer_item, "guid").text = "spacer_end"
+        ET.SubElement(spacer_item, "guid", isPermaLink="false").text = "spacer_end"
 
-    # Convert XML to string and replace escaped CDATA markers
-    rss_output = ET.tostring(rss, encoding='utf-8', xml_declaration=True).decode('utf-8')
-    rss_output = rss_output.replace('&lt;![CDATA[', '<![CDATA[').replace(']]&gt;', ']]>')
-
-    return Response(rss_output, mimetype='application/rss+xml')
+    rss_output = ET.tostring(rss, encoding='utf-8', xml_declaration=True)
+    resp = Response(rss_output, mimetype='application/rss+xml')
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
