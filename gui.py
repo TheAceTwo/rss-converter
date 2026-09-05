@@ -29,6 +29,55 @@ DEFAULT_CONFIG = {
     "output_items": []
 }
 
+# ------------------------------------------------------------------------------
+# ProPresenter integration settings. Stored under config["propresenter"].
+# enabled:               master switch for the background auto-trigger.
+# host / port:           the ProPresenter machine (Settings > Network).
+# prop_id / prop_name:   the prop that holds the RSS scrolling text.
+# refresh_mode:          "trigger" | "clear_trigger" | "fade_trigger" (see propresenter.py).
+# fade_seconds:          transition duration used by fade_trigger.
+# ------------------------------------------------------------------------------
+REFRESH_MODES = ("trigger", "clear_trigger", "fade_trigger")
+PROPRESENTER_DEFAULTS = {
+    "enabled": False,
+    "host": "",
+    "port": 1025,
+    "prop_id": "",
+    "prop_name": "",
+    "refresh_mode": "trigger",
+    "fade_seconds": 0.6,
+}
+DEFAULT_CONFIG["propresenter"] = dict(PROPRESENTER_DEFAULTS)
+
+
+def _as_bool(value):
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def get_propresenter_settings(config):
+    """Returns the propresenter block merged over defaults with types coerced."""
+    raw = config.get("propresenter") or {}
+    out = dict(PROPRESENTER_DEFAULTS)
+    out["enabled"] = _as_bool(raw.get("enabled", out["enabled"]))
+    out["host"] = str(raw.get("host", out["host"]) or "").strip()
+    try:
+        out["port"] = int(raw.get("port", out["port"]))
+    except (TypeError, ValueError):
+        out["port"] = PROPRESENTER_DEFAULTS["port"]
+    out["prop_id"] = str(raw.get("prop_id", out["prop_id"]) or "").strip()
+    out["prop_name"] = str(raw.get("prop_name", out["prop_name"]) or "").strip()
+    mode = str(raw.get("refresh_mode", out["refresh_mode"]) or "").strip()
+    out["refresh_mode"] = mode if mode in REFRESH_MODES else PROPRESENTER_DEFAULTS["refresh_mode"]
+    try:
+        fade = float(raw.get("fade_seconds", out["fade_seconds"]))
+        out["fade_seconds"] = fade if 0 < fade <= 10 else PROPRESENTER_DEFAULTS["fade_seconds"]
+    except (TypeError, ValueError):
+        out["fade_seconds"] = PROPRESENTER_DEFAULTS["fade_seconds"]
+    return out
+
+
 # Auth fields are never written by the app — only by the user editing config.json directly.
 _AUTH_KEYS = {"auth_username", "auth_password"}
 
