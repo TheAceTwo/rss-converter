@@ -9,6 +9,7 @@ Event types:
   [XML]   - The live XML feed URL was changed.
   [TXT]   - The custom (static) text boxes were changed.
   [Feed]  - The live output feed selection was changed.
+  [PP]    - ProPresenter integration: trigger sent, trigger failed, settings changed.
 """
 
 import os
@@ -112,4 +113,13 @@ def log_feed_change(items: list) -> None:
     Example: 12:47:28 PM 2026-08-18 [Feed] user changed live output to [item1][item2]
     """
     line = f"{_timestamp()} [Feed] user changed live output to {_fmt_list(items)}"
+    _logger.info(line)
+
+
+def log_propresenter(message: str) -> None:
+    """
+    Logs a ProPresenter integration event.
+    Example: 08:44:36 PM 2026-08-28 [PP] triggered prop Ticker (uuid AAAA-1111)
+    """
+    line = f"{_timestamp()} [PP] {message}"
     _logger.info(line)
