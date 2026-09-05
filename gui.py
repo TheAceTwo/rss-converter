@@ -1840,7 +1840,7 @@ HTML_TEMPLATE = """
             let anyChanged = false;
 
             cards.forEach(card => {
-                const source = card.getAttribute('data-source');
+                let source = card.getAttribute('data-source');
                 let id = card.getAttribute('data-id');
                 const currentText = card.getAttribute('data-text') || '';
 
@@ -2362,10 +2362,6 @@ def index():
 
     output_items = resolve_output_items(raw_output_items, live_items, items_by_id)
     combined_ticker = ticker_text(output_items)
-
-    # Generate combined ticker preview from output_items
-    valid_texts = [it["text"].strip() for it in output_items if it.get("text") and it["text"].strip()]
-    combined_ticker = "  |  ".join(valid_texts)
 
     return render_template_string(
         HTML_TEMPLATE, 
