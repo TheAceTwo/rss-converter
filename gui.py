@@ -957,6 +957,24 @@ HTML_TEMPLATE = """
             box-shadow: 0 0 8px rgba(0, 136, 255, 0.7);
         }
         @keyframes ticker { 0% { transform: translate3d(0, 0, 0); } 100% { transform: translate3d(-100%, 0, 0); } }
+        /* ProPresenter integration card */
+        .pp-card { background: #1b1b1b; border: 1px solid #2e2e2e; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+        .pp-card-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 0.9rem; font-weight: 600; color: #fff; }
+        .pp-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+        .pp-row .custom-input { font-size: 0.85rem; padding: 6px 10px; }
+        .pp-row select.custom-input { flex: 1; min-width: 0; }
+        .pp-port { max-width: 90px; }
+        .pp-toggles { display: flex; gap: 14px; font-size: 0.8rem; color: #bdbdbd; margin-bottom: 8px; }
+        .pp-toggles label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+        .pp-modes { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+        .pp-mode { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: #bdbdbd; padding: 6px 8px; border: 1px solid #2e2e2e; border-radius: 6px; cursor: pointer; }
+        .pp-mode:has(input:checked) { border-color: #0066cc; background: rgba(0,102,204,0.12); color: #fff; }
+        .pp-mode small { color: #8a8a8a; margin-left: auto; }
+        .pp-fade { width: 64px; font-size: 0.8rem; padding: 3px 6px; }
+        .pp-status { font-size: 0.75rem; min-height: 1.1em; color: #9a9a9a; }
+        .pp-status.ok { color: #4ade80; }
+        .pp-status.err { color: #f87171; }
+        .btn-sm { padding: 6px 12px; font-size: 0.8rem; white-space: nowrap; }
     </style>
 </head>
 <body>
@@ -1020,6 +1038,49 @@ HTML_TEMPLATE = """
                         <span>Save URL</span>
                     </button>
                 </form>
+
+                <!-- ProPresenter auto-trigger -->
+                <div class="pp-card">
+                    <div class="pp-card-title">
+                        <span>ProPresenter Auto-Refresh</span>
+                        <span class="item-count-badge" id="pp-badge">Off</span>
+                    </div>
+                    <div class="pp-row">
+                        <input type="text" id="pp-host" class="custom-input" placeholder="ProPresenter IP (e.g. 192.168.1.50)" style="flex:1;">
+                        <input type="number" id="pp-port" class="custom-input pp-port" placeholder="Port" min="1" max="65535">
+                        <button type="button" id="pp-test-btn" class="btn btn-sm" onclick="ppTestConnection()" title="Connect to ProPresenter and list props">Test Connection</button>
+                    </div>
+                    <div class="pp-row">
+                        <select id="pp-prop" class="custom-input" title="Prop that holds the RSS scrolling text">
+                            <option value="">— run Test Connection to list props —</option>
+                        </select>
+                    </div>
+                    <div class="pp-modes" title="How ProPresenter reloads the ticker. Pick one, press Trigger Now to preview it live, then Save.">
+                        <label class="pp-mode">
+                            <input type="radio" name="pp-mode" value="trigger" checked>
+                            <span>Trigger only</span>
+                            <small>restarts scroll in place</small>
+                        </label>
+                        <label class="pp-mode">
+                            <input type="radio" name="pp-mode" value="clear_trigger">
+                            <span>Clear, then trigger</span>
+                            <small>ticker blinks off and back (like manual)</small>
+                        </label>
+                        <label class="pp-mode">
+                            <input type="radio" name="pp-mode" value="fade_trigger">
+                            <span>Fade, then trigger</span>
+                            <small>cross-fade over <input type="number" id="pp-fade-seconds" class="custom-input pp-fade" value="0.6" min="0.1" max="10" step="0.1"> s</small>
+                        </label>
+                    </div>
+                    <div class="pp-toggles">
+                        <label><input type="checkbox" id="pp-enabled"> Auto-trigger on changes</label>
+                    </div>
+                    <div class="pp-row" style="margin-bottom:4px;">
+                        <button type="button" id="pp-save-btn" class="btn btn-sm" onclick="ppSaveSettings()">Save</button>
+                        <button type="button" id="pp-trigger-btn" class="btn btn-sm" onclick="ppTriggerNow()" style="background:#1b6329; border:1px solid #2b8a3e;" title="Send a trigger to ProPresenter right now using the mode selected above (does not save)">Trigger Now</button>
+                        <span class="pp-status" id="pp-status"></span>
+                    </div>
+                </div>
 
                 <div class="instructions-hint">
                     Drag any item box below into the <strong>Output Feed</strong> on the right.
@@ -1816,8 +1877,133 @@ HTML_TEMPLATE = """
             }
         }
 
+        // --- ProPresenter integration ---
+        function ppSetStatus(msg, kind) {
+            const el = document.getElementById('pp-status');
+            el.textContent = msg || '';
+            el.className = 'pp-status' + (kind ? ' ' + kind : '');
+        }
+
+        function ppRenderBadge(settings, lastError) {
+            const badge = document.getElementById('pp-badge');
+            if (!settings.enabled) { badge.textContent = 'Off'; badge.style.background = ''; badge.style.color = ''; return; }
+            if (lastError) { badge.textContent = 'Error'; badge.style.background = '#611e1e'; badge.style.color = '#fff'; return; }
+            badge.textContent = 'On'; badge.style.background = '#1b6329'; badge.style.color = '#fff';
+        }
+
+        function ppFillPropSelect(props, selectedId, selectedName) {
+            const sel = document.getElementById('pp-prop');
+            sel.innerHTML = '';
+            if (!props || props.length === 0) {
+                const opt = document.createElement('option');
+                opt.value = ''; opt.textContent = '— no props found —';
+                sel.appendChild(opt);
+                return;
+            }
+            props.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.uuid || p.name;
+                opt.dataset.name = p.name;
+                opt.textContent = p.name + (p.is_active ? '  (live)' : '');
+                if ((selectedId && opt.value === selectedId) || (!selectedId && selectedName && p.name === selectedName)) opt.selected = true;
+                sel.appendChild(opt);
+            });
+        }
+
+        function ppGetMode() {
+            const checked = document.querySelector('input[name="pp-mode"]:checked');
+            return checked ? checked.value : 'trigger';
+        }
+
+        function ppSetMode(mode) {
+            const radio = document.querySelector('input[name="pp-mode"][value="' + mode + '"]');
+            if (radio) radio.checked = true;
+        }
+
+        function ppGetFadeSeconds() {
+            const v = parseFloat(document.getElementById('pp-fade-seconds').value);
+            return (isFinite(v) && v > 0) ? v : 0.6;
+        }
+
+        async function ppLoadStatus() {
+            try {
+                const res = await fetch('/api/propresenter/status');
+                if (!res.ok) return;
+                const data = await res.json();
+                const s = data.settings;
+                document.getElementById('pp-host').value = s.host || '';
+                document.getElementById('pp-port').value = s.port || 1025;
+                document.getElementById('pp-enabled').checked = !!s.enabled;
+                ppSetMode(s.refresh_mode || 'trigger');
+                document.getElementById('pp-fade-seconds').value = s.fade_seconds || 0.6;
+                if (s.prop_id || s.prop_name) {
+                    ppFillPropSelect([{ uuid: s.prop_id, name: s.prop_name || s.prop_id, is_active: false }], s.prop_id, s.prop_name);
+                }
+                ppRenderBadge(s, data.last_error);
+                if (data.last_error) ppSetStatus('Last error: ' + data.last_error, 'err');
+                else if (data.last_trigger_at) ppSetStatus('Last trigger ' + new Date(data.last_trigger_at * 1000).toLocaleTimeString(), 'ok');
+            } catch (e) { console.error('ppLoadStatus', e); }
+        }
+
+        async function ppTestConnection() {
+            const host = document.getElementById('pp-host').value.trim();
+            const port = document.getElementById('pp-port').value.trim();
+            if (!host) { ppSetStatus('Enter the ProPresenter IP first.', 'err'); return; }
+            ppSetStatus('Connecting…');
+            try {
+                const res = await fetch('/api/propresenter/props?host=' + encodeURIComponent(host) + '&port=' + encodeURIComponent(port));
+                const data = await res.json();
+                if (!data.ok) { ppSetStatus(data.error, 'err'); return; }
+                const sel = document.getElementById('pp-prop');
+                const currentId = sel.value;
+                ppFillPropSelect(data.props, currentId, null);
+                ppSetStatus('Connected. ' + data.props.length + ' prop(s) found. Pick the ticker prop and Save.', 'ok');
+            } catch (e) { ppSetStatus('Request failed: ' + e, 'err'); }
+        }
+
+        async function ppSaveSettings() {
+            const sel = document.getElementById('pp-prop');
+            const opt = sel.options[sel.selectedIndex];
+            const body = {
+                host: document.getElementById('pp-host').value.trim(),
+                port: parseInt(document.getElementById('pp-port').value, 10) || 1025,
+                prop_id: sel.value || '',
+                prop_name: (opt && opt.dataset && opt.dataset.name) ? opt.dataset.name : '',
+                enabled: document.getElementById('pp-enabled').checked,
+                refresh_mode: ppGetMode(),
+                fade_seconds: ppGetFadeSeconds(),
+            };
+            ppSetStatus('Saving…');
+            try {
+                const res = await fetch('/api/propresenter/settings', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+                });
+                const data = await res.json();
+                if (!data.ok) { ppSetStatus('Save failed.', 'err'); return; }
+                ppRenderBadge(data.settings, '');
+                ppSetStatus('Saved.', 'ok');
+            } catch (e) { ppSetStatus('Save failed: ' + e, 'err'); }
+        }
+
+        async function ppTriggerNow() {
+            // Uses the mode currently selected in the radios, even if not saved yet,
+            // so the three modes can be compared live before committing to one.
+            const mode = ppGetMode();
+            ppSetStatus('Triggering (' + mode.replace('_', ' + ') + ')…');
+            try {
+                const res = await fetch('/api/propresenter/trigger', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ refresh_mode: mode, fade_seconds: ppGetFadeSeconds() })
+                });
+                const data = await res.json();
+                if (!data.ok) { ppSetStatus(data.error, 'err'); return; }
+                ppSetStatus('Trigger sent via ' + data.refresh_mode + ' at ' + new Date().toLocaleTimeString() + '. Press Save to keep this mode.', 'ok');
+            } catch (e) { ppSetStatus('Trigger failed: ' + e, 'err'); }
+        }
+
         // Initialize UI numbers on page load and start 15s auto-refresh
         document.addEventListener('DOMContentLoaded', () => {
+            ppLoadStatus();
             updateOutputUI();
             updateCustomCount();
 

@@ -128,3 +128,11 @@ def test_routes_require_login(tmp_config):
     res = client.get("/api/propresenter/status")
     assert res.status_code == 302
     assert "/login" in res.headers["Location"]
+
+
+def test_index_renders_propresenter_card(logged_in_client):
+    res = logged_in_client.get("/")
+    assert b"ProPresenter Auto-Refresh" in res.data
+    assert b'id="pp-host"' in res.data
+    assert b"ppTriggerNow" in res.data
+    assert res.data.count(b'<input type="radio" name="pp-mode"') == 3
