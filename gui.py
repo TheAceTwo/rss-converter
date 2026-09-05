@@ -7,6 +7,8 @@ import urllib.request
 from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
 import logger as activity_log
 from output_resolver import resolve_output_items, ticker_text
+import propresenter
+from watcher import TickerWatcher
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'rss-converter-gui-secret-key-999')
@@ -132,6 +134,19 @@ def node_to_dict(node):
         else:
             data[child.tag] = node_to_dict(child)
     return data
+
+
+# The watcher is created at import so routes can call notify_change(), but the
+# polling thread only starts in __main__ (see bottom of file). Tests import
+# this module and must not spawn threads.
+ticker_watcher = TickerWatcher(
+    get_config=get_config,
+    save_config=save_config,
+    fetch_live_data=lambda link: fetch_live_data(link),
+    get_settings=get_propresenter_settings,
+    poll_seconds=15,
+    debounce_seconds=3.0,
+)
 
 LOGIN_TEMPLATE = """
 <!DOCTYPE html>
@@ -1977,6 +1992,7 @@ def api_save_output():
     config['output_items'] = cleaned_items
     save_config(config)
     activity_log.log_feed_change(log_text_items)
+    ticker_watcher.notify_change()
     return jsonify({"ok": True, "count": len(cleaned_items)})
 
 @app.route('/save_custom', methods=['POST'])
@@ -1991,7 +2007,81 @@ def save_custom():
     save_config(config)
     # Log the custom text change: records every item currently in the static list
     activity_log.log_txt_change(cleaned_items)
+    ticker_watcher.notify_change()
     return redirect(url_for('index'))
+
+# ==============================================================================
+# PROPRESENTER INTEGRATION ROUTES
+# ==============================================================================
+@app.route('/api/propresenter/status')
+def api_propresenter_status():
+    settings = get_propresenter_settings(get_config())
+    return jsonify({
+        "settings": settings,
+        "last_trigger_at": ticker_watcher.last_status["last_trigger_at"],
+        "last_error": ticker_watcher.last_status["last_error"],
+    })
+
+
+@app.route('/api/propresenter/settings', methods=['POST'])
+def api_propresenter_settings():
+    data = request.get_json(silent=True) or {}
+    config = get_config()
+    current = get_propresenter_settings(config)
+    merged = dict(current)
+    for key in PROPRESENTER_DEFAULTS:
+        if key in data:
+            merged[key] = data[key]
+    settings = get_propresenter_settings({"propresenter": merged})
+    config["propresenter"] = settings
+    save_config(config)
+    activity_log.log_propresenter("settings saved: host={} port={} prop={} enabled={} mode={} fade={}s".format(
+        settings["host"], settings["port"], settings["prop_name"] or settings["prop_id"],
+        settings["enabled"], settings["refresh_mode"], settings["fade_seconds"]))
+    return jsonify({"ok": True, "settings": settings})
+
+
+@app.route('/api/propresenter/props')
+def api_propresenter_props():
+    saved = get_propresenter_settings(get_config())
+    host = (request.args.get('host') or saved["host"]).strip()
+    port = request.args.get('port') or saved["port"]
+    try:
+        props = propresenter.list_props(host, port)
+    except propresenter.ProPresenterError as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
+    return jsonify({"ok": True, "props": props})
+
+
+@app.route('/api/propresenter/trigger', methods=['POST'])
+def api_propresenter_trigger():
+    """Manual 'Trigger Now'. Optional JSON body {"refresh_mode": ..., "fade_seconds": ...}
+    overrides the saved mode for this one press so the three modes can be compared
+    live without saving each time."""
+    settings = get_propresenter_settings(get_config())
+    override = request.get_json(silent=True) or {}
+    if override:
+        merged = dict(settings)
+        for key in ("refresh_mode", "fade_seconds"):
+            if key in override:
+                merged[key] = override[key]
+        settings = get_propresenter_settings({"propresenter": merged})
+    prop = settings["prop_id"] or settings["prop_name"]
+    if not prop:
+        return jsonify({"ok": False, "error": "No prop selected. Use Test Connection and pick the ticker prop."}), 502
+    try:
+        propresenter.trigger_prop(settings["host"], settings["port"], prop,
+                                  mode=settings["refresh_mode"], fade_seconds=settings["fade_seconds"])
+    except propresenter.ProPresenterError as e:
+        ticker_watcher.last_status["last_error"] = str(e)
+        activity_log.log_propresenter("manual trigger FAILED ({}): {}".format(settings["refresh_mode"], e))
+        return jsonify({"ok": False, "error": str(e)}), 502
+    ticker_watcher.last_status["last_trigger_at"] = time.time()
+    ticker_watcher.last_status["last_error"] = ""
+    activity_log.log_propresenter("manual trigger of prop {} via {}".format(
+        settings["prop_name"] or prop, settings["refresh_mode"]))
+    return jsonify({"ok": True, "refresh_mode": settings["refresh_mode"]})
+
 
 # ==============================================================================
 # RATE LIMITING & LOGIN LOCKOUT
@@ -2124,4 +2214,5 @@ def logout():
     return redirect(url_for('login'))
 
 if __name__ == '__main__':
+    ticker_watcher.start()
     app.run(host='0.0.0.0', port=5001)
