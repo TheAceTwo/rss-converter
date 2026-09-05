@@ -16,15 +16,12 @@ CONFIG_FILE = 'config.json'
 # DEFAULT CONFIGURATION
 # - live_link: XML/RSS source link. Leave empty ("") if using custom text items only.
 # - enable_spacer: Appends a blank item to the RSS feed for smooth ticker looping.
-# - auth_username & auth_password: Login credentials for the web management GUI (gui.py).
-#   IMPORTANT: Setting EITHER auth_username OR auth_password to "" (empty string)
-#   completely DISABLES login authentication, allowing open access to the GUI.
+# Login credentials for the control panel live in config.json too, but they are
+# read only by gui.py. This feed server never reads or writes them.
 # ==============================================================================
 DEFAULT_CONFIG = {
     "live_link": DEFAULT_LIVE_LINK,
     "enable_spacer": True,
-    "auth_username": "heres-200-digits-of-pi-since-you-wont-change-the-default-login",
-    "auth_password": "3.14159265358979323846264338327950288419716939937510582097494459230781640628620899862803482534211706798214808651328230664709384460955058223172535940812848111745028410270193852110555964462294895493038196",
     "custom_items": [""],
     "output_items": []
 }
