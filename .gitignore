@@ -1,1 +1,7 @@
 config.json
+__pycache__/
+*.pyc
+rss_changes.log
+venv/
+.venv/
+.pytest_cache/
