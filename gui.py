@@ -6,6 +6,7 @@ import urllib.request
 # pyrefly: ignore [missing-import]
 from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
 import logger as activity_log
+from output_resolver import resolve_output_items, ticker_text
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'rss-converter-gui-secret-key-999')
@@ -1871,45 +1872,8 @@ def index():
     # Log the live feed content the first time it's fetched and whenever it changes.
     activity_log.log_live_items_change([it['title'] for it in live_items])
 
-    # Resolve output items (dicts or legacy strings)
-    output_items = []
-    for it in raw_output_items:
-        if isinstance(it, dict):
-            src = it.get("source", "custom")
-            item_id = it.get("id", "")
-            current_text = it.get("text", "")
-            if src == "live" and item_id and item_id in items_by_id:
-                resolved_text = items_by_id[item_id]
-            else:
-                resolved_text = current_text
-            output_items.append({"source": src, "id": item_id, "text": resolved_text})
-        elif isinstance(it, str):
-            # Legacy string from config.json: match against live matchup
-            matched_id = None
-            resolved_text = it.strip()
-            for live_it in live_items:
-                lid = live_it['id']
-                ltitle = live_it['title']
-                parts = lid.split('|')
-                # 1. Match by teams: e.g. "Glynn Academy" and "Camden County" in text
-                if len(parts) == 2 and parts[0] in it and parts[1] in it:
-                    matched_id = lid
-                    resolved_text = items_by_id.get(matched_id, it.strip())
-                    break
-                # 2. Match by exact or partial title
-                elif it.strip() == ltitle.strip() or it.strip() in ltitle or ltitle in it.strip():
-                    matched_id = lid
-                    resolved_text = items_by_id.get(matched_id, it.strip())
-                    break
-
-            if matched_id:
-                output_items.append({"source": "live", "id": matched_id, "text": resolved_text})
-            else:
-                output_items.append({"source": "custom", "id": "", "text": resolved_text})
-
-    # Generate combined ticker preview from output_items
-    valid_texts = [it["text"].strip() for it in output_items if it.get("text") and it["text"].strip()]
-    combined_ticker = "  |  ".join(valid_texts)
+    output_items = resolve_output_items(raw_output_items, live_items, items_by_id)
+    combined_ticker = ticker_text(output_items)
 
     return render_template_string(
         HTML_TEMPLATE, 
