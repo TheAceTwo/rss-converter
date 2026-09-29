@@ -16,10 +16,13 @@ import os
 import logging
 from datetime import datetime
 
+import paths
+
 # ---------------------------------------------------------------------------
 # File path for the activity log. Sits next to this script.
 # ---------------------------------------------------------------------------
-LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rss_changes.log')
+LOG_FILE = paths.resolve('rss_changes.log',
+                         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rss_changes.log'))
 
 # ---------------------------------------------------------------------------
 # Set up a plain file logger (no extra formatting - we build the line ourselves).

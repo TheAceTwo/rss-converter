@@ -6,11 +6,12 @@ import xml.etree.ElementTree as ET
 from email.utils import formatdate
 # pyrefly: ignore [missing-import]
 from flask import Flask, Response
+import paths
 
 app = Flask(__name__)
 
 DEFAULT_LIVE_LINK = os.environ.get('XML_URL', '')
-CONFIG_FILE = 'config.json'
+CONFIG_FILE = paths.resolve('config.json', 'config.json')
 
 # ==============================================================================
 # DEFAULT CONFIGURATION
@@ -111,4 +112,4 @@ def get_rss():
     return resp
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=int(os.environ.get('FEED_PORT', 5000)))

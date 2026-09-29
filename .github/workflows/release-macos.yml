@@ -1,0 +1,65 @@
+name: Build macOS (Apple Silicon)
+
+# Push a tag like v1.0.0 to build and publish a GitHub Release.
+# "Run workflow" (workflow_dispatch) builds and uploads the zip as a run artifact only.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest   # Apple Silicon (arm64)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt pyinstaller
+
+      - name: Test
+        run: pytest -q
+
+      - name: Build
+        run: |
+          pyinstaller --noconfirm --name rss-converter run_mac.py
+          cp macos/install.sh dist/rss-converter/install.sh
+          chmod +x dist/rss-converter/install.sh
+
+      - name: Smoke test the built binary
+        env:
+          FEED_PORT: '15000'
+          GUI_PORT: '15001'
+        run: |
+          export RSS_CONVERTER_DATA_DIR="$RUNNER_TEMP/rss-data"
+          dist/rss-converter/rss-converter > "$RUNNER_TEMP/app.log" 2>&1 &
+          APP_PID=$!
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:15000/rss | grep -q "<rss"; then ok=1; break; fi
+            sleep 1
+          done
+          kill $APP_PID || true
+          if [ "$ok" != "1" ]; then cat "$RUNNER_TEMP/app.log"; exit 1; fi
+          test -f "$RSS_CONVERTER_DATA_DIR/config.json"
+
+      - name: Package
+        run: ditto -c -k --keepParent dist/rss-converter rss-converter-macos-arm64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rss-converter-macos-arm64
+          path: rss-converter-macos-arm64.zip
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: rss-converter-macos-arm64.zip
+          generate_release_notes: true

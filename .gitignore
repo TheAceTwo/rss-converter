@@ -5,3 +5,6 @@ rss_changes.log
 venv/
 .venv/
 .pytest_cache/
+build/
+dist/
+*.spec

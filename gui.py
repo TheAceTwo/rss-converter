@@ -9,11 +9,12 @@ from flask import Flask, render_template_string, request, redirect, url_for, ses
 import logger as activity_log
 from output_resolver import resolve_output_items, ticker_text
 import propresenter
+import paths
 from watcher import TickerWatcher
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'rss-converter-gui-secret-key-999')
-CONFIG_FILE = 'config.json'
+CONFIG_FILE = paths.resolve('config.json', 'config.json')
 DEFAULT_LIVE_LINK = os.environ.get('XML_URL', '')
 config_lock = threading.Lock()
 
@@ -482,13 +483,13 @@ SETUP_TEMPLATE = """
         <div class="step">
             <div class="step-num">1</div>
             <div class="step-text">
-                A <code>config.json</code> file has been created in the application directory.
+                A config file has been created at <code>{{ config_path }}</code>.
             </div>
         </div>
         <div class="step">
             <div class="step-num">2</div>
             <div class="step-text">
-                Open <code>config.json</code> and add your credentials:
+                Open that file and add your credentials:
                 <div class="code-block">
                     &quot;auth_username&quot;: &quot;your_username&quot;,<br>
                     &quot;auth_password&quot;: &quot;your_password&quot;
@@ -2587,7 +2588,7 @@ def setup():
     # If credentials have been added since the page was last loaded, go to login.
     if required_user and required_pass:
         return redirect(url_for('login'))
-    return render_template_string(SETUP_TEMPLATE)
+    return render_template_string(SETUP_TEMPLATE, config_path=os.path.abspath(CONFIG_FILE))
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -2640,4 +2641,4 @@ def logout():
 if __name__ == '__main__':
     ensure_background_worker_started()
     ticker_watcher.start()
-    app.run(host='0.0.0.0', port=5001)
+    app.run(host='0.0.0.0', port=int(os.environ.get('GUI_PORT', 5001)))

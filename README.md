@@ -36,6 +36,20 @@ The background watcher polls the live feed every 15 seconds, saves score changes
 
 Activity is logged to `rss_changes.log`. ProPresenter events are tagged `[PP]`.
 
+## Run on macOS (Apple Silicon)
+
+Each tagged release ships a prebuilt Apple Silicon build, produced by the `Build macOS (Apple Silicon)` GitHub Actions workflow.
+
+1. Download `rss-converter-macos-arm64.zip` from the [Releases](../../releases) page and unzip it.
+2. In Terminal, from the unzipped `rss-converter` folder, run `./install.sh`. It copies the app to `~/Applications/rss-converter`, clears the download quarantine flag (the build is not notarized), and starts it at every login.
+3. Open http://localhost:5001. Add `auth_username` and `auth_password` to `~/Library/Application Support/rss-converter/config.json`, then reload.
+
+The feed is at `http://localhost:5000/rss`. Settings and `rss_changes.log` live in `~/Library/Application Support/rss-converter`; app output goes to `~/Library/Logs/rss-converter.log`. Remove everything with `./install.sh uninstall`.
+
+- **Port 5000 in use?** macOS AirPlay Receiver can hold it. Turn it off in System Settings > General > AirDrop & Handoff, or set `FEED_PORT` (and `GUI_PORT`) to other ports.
+- **Running it by hand:** `./rss-converter` in the unzipped folder starts both servers in the foreground.
+- **Cutting a release:** `git tag v1.0.0 && git push origin v1.0.0`. The workflow runs the tests, builds, smoke-tests the binary, and publishes the zip. Use "Run workflow" on the Actions tab to build without publishing.
+
 ## Development
 
 ```bash
