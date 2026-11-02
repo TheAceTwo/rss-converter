@@ -43,18 +43,19 @@ The earlier Docker-based deployment is preserved on the [`docker-deploy`](https:
 ## Run with Docker / Portainer
 
 `main` also deploys as a Portainer stack straight from this GitHub repo (Stacks > Add stack > Repository,
-compose path `docker-compose.yml`). In Docker the feed is published on host port **5000** by default, so
-existing ProPresenter URLs keep working; the control panel stays on 5001. Set `AUTH_USERNAME`
-and `AUTH_PASSWORD` as stack environment variables.
+compose path `docker-compose.yml`). The stack runs the feed (`rss-converter`, port **5000**), the control
+panel (`rss-gui`, port 5001) and a Cloudflare Tunnel (`cloudflared`). Settings live in a Portainer-managed
+volume; set `AUTH_USERNAME`, `AUTH_PASSWORD` and `TUNNEL_TOKEN` as stack environment variables, then put
+the XML link in through the control panel.
 
-Full steps, variables and upgrade notes: [docs/DOCKER.md](docs/DOCKER.md).
+Full steps, variables and tunnel routes: [docs/DOCKER.md](docs/DOCKER.md).
 
 | | Mac (`mac/` scripts) | Docker / Portainer |
 |---|---|---|
 | Feed URL for ProPresenter | `http://<mac>:5050/rss` | `http://<docker-host>:5000/rss` |
 | Control panel | `http://<mac>:5001` | `http://<docker-host>:5001` |
 | Settings | `rss-converter.env` | stack environment variables |
-| `config.json` + activity log | project folder | `rss-data` volume (`/data`) |
+| `config.json` + activity log | project folder | `rss-data` volume (managed by Portainer) |
 
 ## Run manually (any OS)
 

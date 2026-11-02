@@ -3,88 +3,98 @@
 `main` can be deployed two ways from the same code:
 
 - **On a Mac** with the scripts in `mac/`: see [MAC_SETUP.md](MAC_SETUP.md).
-- **In Docker**, for example as a Portainer stack built straight from this GitHub repo (this page).
+- **In Docker**, as a Portainer stack built straight from this GitHub repo (this page).
 
 > The old `main` from before the Mac changes is kept on the
 > [`docker-deploy`](https://github.com/TheAceTwo/rss-converter/tree/docker-deploy) branch if you ever need it.
 
 ## What gets deployed
 
-`docker-compose.yml` builds one image from the `Dockerfile` and runs it as two services:
+`docker-compose.yml` builds one image from the `Dockerfile` and runs three containers:
 
-| Service | Runs | Container port | Host port (default) | Variable for host port |
-|---|---|---|---|---|
-| `feed` | `app.py`, the RSS feed for ProPresenter | 5000 | **5000** | `FEED_HOST_PORT` |
-| `gui` | `gui.py`, the control panel + background watcher | 5001 | **5001** | `GUI_HOST_PORT` |
+| Container | Runs | Port inside the stack | Published on the host (default) |
+|---|---|---|---|
+| `rss-converter` | `app.py`, the RSS feed ProPresenter reads | 5000 | `5000` (`FEED_HOST_PORT`) |
+| `rss-gui` | `gui.py`, the control panel + background watcher | 5001 | `5001` (`GUI_HOST_PORT`) |
+| `cloudflared` | Cloudflare Tunnel | none | none |
 
-In Docker the feed stays on **5000**, inside and outside the container, exactly as before, so an existing
-ProPresenter Linked Text URL of `http://<docker-host>:5000/rss` and any tunnel route to `rss-converter:5000`
-keep working. (Only on a Mac does the feed default to 5050, because macOS's AirPlay Receiver holds 5000.)
-
-Both services share a named volume, `rss-data`, mounted at `/data`. It holds `config.json` (feed URL,
-custom boxes, ProPresenter settings) and `rss_changes.log`, so settings survive redeploys and image updates.
+Everything the app saves lives in the **`rss-data` volume**, which Portainer manages:
+`config.json` (XML link, custom boxes, ProPresenter settings), `rss_changes.log`, and `.secret_key`.
+It survives redeploys and image rebuilds. A new volume starts with an empty config, so after the first
+deploy you log in and paste the XML link into the control panel.
 
 ## Environment variables
 
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `SECRET_KEY` | no | random | Signs control panel login cookies. If blank, a random key is generated once and saved as `.secret_key` next to `config.json`. |
-| `AUTH_USERNAME` | yes, unless set in `config.json` | empty | Control panel username |
-| `AUTH_PASSWORD` | yes, unless set in `config.json` | empty | Control panel password |
-| `FEED_HOST_PORT` | no | `5000` | Host port for the RSS feed |
-| `GUI_HOST_PORT` | no | `5001` | Host port for the control panel |
-| `XML_URL` | no | empty | Default live XML source (the URL saved in the panel takes priority) |
+Set these on the stack in Portainer (**Environment variables** section). All are optional except where noted.
 
-If `auth_username` and `auth_password` are both set in `config.json`, those win over the environment variables.
+| Variable | Default | Purpose |
+|---|---|---|
+| `AUTH_USERNAME` | empty | Control panel username. **Set this** (or the panel shows a setup page). |
+| `AUTH_PASSWORD` | empty | Control panel password. **Set this.** |
+| `TUNNEL_TOKEN` | empty | Cloudflare Tunnel token. **Required** for the `cloudflared` container. If you don't use a tunnel, delete that service from the compose file. |
+| `SECRET_KEY` | random | Signs login cookies. Leave it out and a random key is generated once and kept in the volume. If you set it, use letters and digits only (64 is plenty). |
+| `XML_URL` | empty | Default live XML link. The link saved in the control panel takes priority. |
+| `FEED_HOST_PORT` | `5000` | Host port for the RSS feed (`http://<server>:5000/rss`). |
+| `GUI_HOST_PORT` | `5001` | Host port for the control panel. Use `127.0.0.1:5001` to keep it reachable only from the server itself, e.g. when Cloudflare Tunnel publishes it. |
+
+## Cloudflare Tunnel routes
+
+Inside the stack, containers reach each other by name. In the Cloudflare Zero Trust dashboard
+(Networks > Tunnels > your tunnel > Public hostnames), point the hostnames at:
+
+- Control panel: `http://rss-gui:5001`
+- RSS feed (if you publish it): `http://rss-converter:5000`
+
+These are the same names the old hand-written stack used, so existing routes keep working.
+
+`cloudflared` runs with `--no-autoupdate` on purpose: it can't update itself inside a container.
+Update it by re-pulling the image (see **Updating**).
 
 ## Deploy in Portainer from GitHub
 
-1. **Stacks → Add stack.** Name it, for example, `rss-converter`.
-2. Build method: **Repository**.
-3. Repository URL: `https://github.com/TheAceTwo/rss-converter`
-   - If the repo is private, turn on **Authentication** and use your GitHub username and a personal access token with read access to the repo.
-4. Repository reference: `refs/heads/main`
-5. Compose path: `docker-compose.yml`
-6. **Environment variables:** add `AUTH_USERNAME` and `AUTH_PASSWORD` (and any others from the table above).
-7. Optional: turn on **GitOps updates** (polling or webhook) so Portainer redeploys when `main` changes.
-   Turn on **Re-pull image and redeploy** / force rebuild if offered, so code changes are rebuilt.
-8. **Deploy the stack.**
+1. **Remove the old stack first** if you have one (Stacks > old stack > Delete). The new stack uses the
+   same container names and ports, so both can't run at once. Your old `C:\docker\rss-converter` folder
+   is left untouched.
+2. **Stacks > Add stack.** Name it, for example, `rss-converter`.
+3. Build method: **Repository**.
+4. Repository URL: `https://github.com/TheAceTwo/rss-converter`
+   - If the repo is private, turn on **Authentication** with your GitHub username and a personal access
+     token that can read the repo.
+5. Repository reference: `refs/heads/main`
+6. Compose path: `docker-compose.yml`
+7. **Environment variables:** add `AUTH_USERNAME`, `AUTH_PASSWORD`, `TUNNEL_TOKEN`, and
+   `GUI_HOST_PORT=127.0.0.1:5001` if the panel should only be reachable through the tunnel. Add any others
+   from the table above.
+8. Optional: turn on **GitOps updates** (polling or webhook) so Portainer redeploys when `main` changes.
+9. **Deploy the stack.** The first deploy builds the image, which takes a minute.
 
-Then open `http://<docker-host>:5001`, log in, and paste the live XML URL into the panel.
-Point ProPresenter's Linked Text at `http://<docker-host>:5000/rss` (or your `FEED_HOST_PORT`).
+Then:
 
-### Updating
+1. Open the control panel (`http://localhost:5001` on the server, or your tunnel hostname) and log in.
+2. Paste the live XML link and click **Save URL**. Add custom boxes and ProPresenter settings as needed.
+3. Point ProPresenter's Linked Text at `http://<server>:5000/rss`.
 
-- With GitOps updates on: push to `main` and Portainer redeploys on its own.
-- Otherwise: open the stack and click **Pull and redeploy**.
+## Updating
+
+- **App code:** with GitOps updates on, push to `main` and Portainer redeploys by itself. Otherwise open
+  the stack and click **Pull and redeploy**. The compose file sets `pull_policy: build`, so every deploy
+  rebuilds the image from the latest code.
+- **cloudflared:** in the stack editor, click **Update the stack** with **Re-pull image and redeploy**
+  turned on. Every month or two is enough; do it on a quiet day, not right before an event.
 
 Your settings in the `rss-data` volume are kept either way.
 
-### Coming from an older Portainer stack
+## Backing up or editing the config
 
-Older stacks ran the stock `python` image with the code bind-mounted from a host folder, for example:
+The config lives in the volume, not on a Windows folder. To look at it or copy it out:
 
-```yaml
-  rss-converter:
-    image: python:3.11-alpine
-    volumes:
-      - C:\docker\rss-converter:/app
-    command: sh -c "pip install -r requirements.txt && python app.py"
+```bash
+docker exec rss-gui cat /data/config.json
+docker cp rss-gui:/data/config.json ./config-backup.json
+docker exec rss-gui cat /data/rss_changes.log
 ```
 
-That style still works with the current `main`. Change two things:
-
-1. **Add `FEED_PORT=5000`** to the feed service's `environment`. Outside Docker the feed now defaults to
-   5050, so without this the `5000:5000` mapping points at nothing.
-2. Optional: `AUTH_USERNAME` / `AUTH_PASSWORD` on the GUI service. You don't need `SECRET_KEY`; if it is
-   missing or blank, a random key is generated and saved as `.secret_key` in the mounted folder.
-
-`config.json` and `rss_changes.log` stay in the mounted folder, as before. Older configs upgrade
-automatically the first time the control panel starts.
-
-Before you `git pull` the new code into that folder, back up `rss_changes.log`: it used to be committed
-to the repo and is now ignored, so the pull deletes the tracked copy. Copy it back afterwards; git
-leaves it alone from then on.
+Or in Portainer: Volumes > `<stack>_rss-data` > Browse (where available).
 
 ## Plain Docker Compose (no Portainer)
 
@@ -94,8 +104,10 @@ cd rss-converter
 cat > .env <<'ENV'
 AUTH_USERNAME=admin
 AUTH_PASSWORD=choose-a-password
+TUNNEL_TOKEN=your-tunnel-token
 ENV
 docker compose up -d --build
 ```
 
-Logs: `docker compose logs -f`. Activity log: `docker compose exec gui cat /data/rss_changes.log`.
+No tunnel? Delete the `cloudflared` service from `docker-compose.yml` first, or start only the app:
+`docker compose up -d --build rss-converter rss-gui`.
