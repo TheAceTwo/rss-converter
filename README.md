@@ -20,6 +20,8 @@ The feed uses 5050 rather than Flask's usual 5000 because AirPlay Receiver holds
 | `FEED_HOST` / `GUI_HOST` | `0.0.0.0` | Address each app listens on. `127.0.0.1` keeps it local to the machine. |
 | ProPresenter API port | set in ProPresenter | Entered in the control panel; ProPresenter > Settings > Network |
 | `SECRET_KEY` | built-in placeholder | Signs login cookies. Set your own. |
+| `AUTH_USERNAME` / `AUTH_PASSWORD` | empty | Control panel login, used when `config.json` doesn't set `auth_username` / `auth_password` |
+| `RSS_LOG_FILE` | `rss_changes.log` next to the code | Activity log location |
 | `XML_URL` | empty | Optional default live XML source |
 | `RSS_CONFIG_FILE` | `config.json` next to the code | Shared config for both apps |
 
@@ -37,6 +39,22 @@ mac/uninstall-launchd.sh   # remove the login services
 Full step-by-step setup, including firewall, sleep, and ProPresenter settings: [docs/MAC_SETUP.md](docs/MAC_SETUP.md).
 
 The earlier Docker-based deployment is preserved on the [`docker-deploy`](https://github.com/TheAceTwo/rss-converter/tree/docker-deploy) branch.
+
+## Run with Docker / Portainer
+
+`main` also deploys as a Portainer stack straight from this GitHub repo (Stacks > Add stack > Repository,
+compose path `docker-compose.yml`). In Docker the feed is published on host port **5000** by default, so
+existing ProPresenter URLs keep working; the control panel stays on 5001. Set `SECRET_KEY`, `AUTH_USERNAME`
+and `AUTH_PASSWORD` as stack environment variables.
+
+Full steps, variables and upgrade notes: [docs/DOCKER.md](docs/DOCKER.md).
+
+| | Mac (`mac/` scripts) | Docker / Portainer |
+|---|---|---|
+| Feed URL for ProPresenter | `http://<mac>:5050/rss` | `http://<docker-host>:5000/rss` |
+| Control panel | `http://<mac>:5001` | `http://<docker-host>:5001` |
+| Settings | `rss-converter.env` | stack environment variables |
+| `config.json` + activity log | project folder | `rss-data` volume (`/data`) |
 
 ## Run manually (any OS)
 

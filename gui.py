@@ -93,6 +93,19 @@ def get_propresenter_settings(config):
     return out
 
 
+def get_auth_credentials(config):
+    """
+    (username, password) for the control panel. config.json wins; otherwise the
+    AUTH_USERNAME / AUTH_PASSWORD environment variables (handy in Docker/Portainer).
+    """
+    user = str(config.get("auth_username", "") or "").strip()
+    password = str(config.get("auth_password", "") or "").strip()
+    if user and password:
+        return user, password
+    return (os.environ.get("AUTH_USERNAME", "").strip(),
+            os.environ.get("AUTH_PASSWORD", "").strip())
+
+
 # Auth fields are never written by the app — only by the user editing config.json directly.
 _AUTH_KEYS = {"auth_username", "auth_password"}
 
@@ -514,6 +527,10 @@ SETUP_TEMPLATE = """
         </div>
 
         <hr class="divider">
+        <p class="refresh-note">
+            Running in Docker or Portainer? Set the <code>AUTH_USERNAME</code> and <code>AUTH_PASSWORD</code>
+            environment variables on the stack and redeploy instead.
+        </p>
         <p class="refresh-note">
             Once credentials are saved in <code>config.json</code>, <a href="/">refresh this page</a>.
         </p>
@@ -2144,8 +2161,7 @@ def clear_failed_attempts(ip):
 @app.before_request
 def require_login():
     config = get_config()
-    required_user = str(config.get("auth_username", "")).strip()
-    required_pass = str(config.get("auth_password", "")).strip()
+    required_user, required_pass = get_auth_credentials(config)
     credentials_set = bool(required_user and required_pass)
 
     # Block all routes except /setup and static files when credentials are not configured.
@@ -2161,8 +2177,7 @@ def require_login():
 def setup():
     """Shown when config.json has no credentials set. Instructs user to add them."""
     config = get_config()
-    required_user = str(config.get("auth_username", "")).strip()
-    required_pass = str(config.get("auth_password", "")).strip()
+    required_user, required_pass = get_auth_credentials(config)
     # If credentials have been added since the page was last loaded, go to login.
     if required_user and required_pass:
         return redirect(url_for('login'))
@@ -2171,8 +2186,7 @@ def setup():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     config = get_config()
-    required_user = str(config.get("auth_username", "")).strip()
-    required_pass = str(config.get("auth_password", "")).strip()
+    required_user, required_pass = get_auth_credentials(config)
 
     # If credentials are still not set, send back to setup page.
     if not required_user or not required_pass:

@@ -198,3 +198,22 @@ def test_index_renders_propresenter_card(logged_in_client):
     assert b'id="pp-host"' in res.data
     assert b"ppTriggerNow" in res.data
     assert res.data.count(b'<input type="radio" name="pp-mode"') == 3
+
+
+def test_auth_falls_back_to_environment(monkeypatch):
+    import gui
+    monkeypatch.setenv("AUTH_USERNAME", "envuser")
+    monkeypatch.setenv("AUTH_PASSWORD", "envpass")
+    assert gui.get_auth_credentials({}) == ("envuser", "envpass")
+    # config.json wins when it has both values
+    assert gui.get_auth_credentials({"auth_username": "a", "auth_password": "b"}) == ("a", "b")
+
+
+def test_auth_env_unset_means_setup_page(tmp_config, monkeypatch):
+    import gui
+    monkeypatch.delenv("AUTH_USERNAME", raising=False)
+    monkeypatch.delenv("AUTH_PASSWORD", raising=False)
+    tmp_config.write_text(json.dumps({"live_link": ""}))
+    res = gui.app.test_client().get("/")
+    assert res.status_code == 302
+    assert "/setup" in res.headers["Location"]

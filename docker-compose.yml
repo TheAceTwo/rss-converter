@@ -1,0 +1,38 @@
+# Deploy with Portainer: Stacks > Add stack > Repository, point it at this repo,
+# compose path "docker-compose.yml". Set the variables below under
+# "Environment variables". Full steps: docs/DOCKER.md
+#
+# Ports inside the containers are fixed (feed 5050, panel 5001). The host side
+# is configurable; the feed defaults to 5000 so existing ProPresenter
+# Linked Text URLs (http://<docker-host>:5000/rss) keep working.
+
+services:
+  feed:
+    build: .
+    command: ["python", "app.py"]
+    restart: unless-stopped
+    ports:
+      - "${FEED_HOST_PORT:-5000}:5050"
+    environment:
+      XML_URL: ${XML_URL:-}
+    volumes:
+      - rss-data:/data
+
+  gui:
+    build: .
+    command: ["python", "gui.py"]
+    restart: unless-stopped
+    ports:
+      - "${GUI_HOST_PORT:-5001}:5001"
+    environment:
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY to a long random string}
+      AUTH_USERNAME: ${AUTH_USERNAME:-}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      XML_URL: ${XML_URL:-}
+    volumes:
+      - rss-data:/data
+    depends_on:
+      - feed
+
+volumes:
+  rss-data:

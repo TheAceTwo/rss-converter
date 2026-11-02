@@ -17,9 +17,11 @@ import logging
 from datetime import datetime
 
 # ---------------------------------------------------------------------------
-# File path for the activity log. Sits next to this script.
+# File path for the activity log. Sits next to this script unless RSS_LOG_FILE
+# is set (the Docker image points it at the /data volume).
 # ---------------------------------------------------------------------------
-LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rss_changes.log')
+LOG_FILE = os.environ.get('RSS_LOG_FILE') or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 'rss_changes.log')
 
 # ---------------------------------------------------------------------------
 # Set up a plain file logger (no extra formatting - we build the line ourselves).
