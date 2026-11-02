@@ -13,3 +13,4 @@ docs
 tests
 .env
 .secret_key
+feed_updates.log

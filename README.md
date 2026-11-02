@@ -22,6 +22,8 @@ The feed uses 5050 rather than Flask's usual 5000 because AirPlay Receiver holds
 | `SECRET_KEY` | random, saved as `.secret_key` | Signs login cookies. Leave blank to auto-generate. |
 | `AUTH_USERNAME` / `AUTH_PASSWORD` | empty | Control panel login, used when `config.json` doesn't set `auth_username` / `auth_password` |
 | `RSS_LOG_FILE` | `rss_changes.log` next to the code | Activity log location |
+| `FEED_LOG_DAYS` | 30 | How many days of feed updates `feed_updates.log` keeps |
+| `FEED_LOG_FILE` | `feed_updates.log` next to `config.json` | Feed update log location |
 | `XML_URL` | empty | Optional default live XML source |
 | `RSS_CONFIG_FILE` | `config.json` next to the code | Shared config for both apps |
 
@@ -98,6 +100,16 @@ ProPresenter loads an RSS Linked Text source only when its prop is triggered and
 5. Tick **Auto-trigger on changes** and click **Save**.
 
 The background watcher polls the live feed every 15 seconds, saves score changes into `config.json` so `/rss` stays current with no browser open, and sends one trigger 3 seconds after the last change using the saved mode. Every reload restarts the scroll from the first item; that is how ProPresenter reloads Linked Text.
+
+**Feed log:** every time the content served at `/rss` changes, one line is added to `feed_updates.log`
+(next to `config.json`; in Docker, in the data volume):
+
+```
+2026-11-02 19:04:52  Newton 7 Roswell 0 | Go Tigers!
+```
+
+Lines older than 30 days are deleted automatically (`FEED_LOG_DAYS` changes this). Click **Feed Log** in the
+control panel header to read it in the browser, newest first.
 
 Activity is logged to `rss_changes.log`. ProPresenter events are tagged `[PP]`.
 

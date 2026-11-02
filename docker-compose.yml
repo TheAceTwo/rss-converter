@@ -6,6 +6,7 @@
 #   AUTH_USERNAME / AUTH_PASSWORD  control panel login (or set them in config.json)
 #   SECRET_KEY        signs login cookies; blank = random key saved in the volume
 #   XML_URL           default live XML source
+#   FEED_LOG_DAYS     days kept in feed_updates.log, default 30
 #   FEED_HOST_PORT    host port for the RSS feed, default 5000
 #   GUI_HOST_PORT     host port for the control panel, default 5001.
 #                     Use 127.0.0.1:5001 to keep it reachable only from this
@@ -48,6 +49,7 @@ services:
       SECRET_KEY: ${SECRET_KEY:-}
       AUTH_USERNAME: ${AUTH_USERNAME:-}
       AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      FEED_LOG_DAYS: ${FEED_LOG_DAYS:-30}
       XML_URL: ${XML_URL:-}
     volumes:
       - rss-data:/data

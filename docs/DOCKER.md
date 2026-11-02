@@ -19,7 +19,8 @@
 | `cloudflared` | Cloudflare Tunnel | none | none |
 
 Everything the app saves lives in the **`rss-data` volume**, which Portainer manages:
-`config.json` (XML link, custom boxes, ProPresenter settings), `rss_changes.log`, and `.secret_key`.
+`config.json` (XML link, custom boxes, ProPresenter settings), `feed_updates.log` (one line per feed update,
+last 30 days), `rss_changes.log`, and `.secret_key`.
 It survives redeploys and image rebuilds. A new volume starts with an empty config, so after the first
 deploy you log in and paste the XML link into the control panel.
 
@@ -35,6 +36,7 @@ Set these on the stack in Portainer (**Environment variables** section). All are
 | `SECRET_KEY` | random | Signs login cookies. Leave it out and a random key is generated once and kept in the volume. If you set it, use letters and digits only (64 is plenty). |
 | `XML_URL` | empty | Default live XML link. The link saved in the control panel takes priority. |
 | `FEED_HOST_PORT` | `5000` | Host port for the RSS feed (`http://<server>:5000/rss`). |
+| `FEED_LOG_DAYS` | `30` | Days of history kept in `feed_updates.log`. |
 | `GUI_HOST_PORT` | `5001` | Host port for the control panel. Use `127.0.0.1:5001` to keep it reachable only from the server itself, e.g. when Cloudflare Tunnel publishes it. |
 
 ## Cloudflare Tunnel routes
@@ -92,6 +94,7 @@ The config lives in the volume, not on a Windows folder. To look at it or copy i
 docker exec rss-gui cat /data/config.json
 docker cp rss-gui:/data/config.json ./config-backup.json
 docker exec rss-gui cat /data/rss_changes.log
+docker exec rss-gui cat /data/feed_updates.log   # or click Feed Log in the control panel
 ```
 
 Or in Portainer: Volumes > `<stack>_rss-data` > Browse (where available).

@@ -6,8 +6,9 @@ import threading
 import xml.etree.ElementTree as ET
 import urllib.request
 # pyrefly: ignore [missing-import]
-from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
+from flask import Flask, Response, render_template_string, request, redirect, url_for, session, jsonify
 import logger as activity_log
+import feed_log
 from output_resolver import build_output_items, ticker_settings, ticker_text
 import propresenter
 from watcher import TickerWatcher
@@ -137,17 +138,29 @@ def get_auth_credentials(config):
 # Auth fields are never written by the app — only by the user editing config.json directly.
 _AUTH_KEYS = {"auth_username", "auth_password"}
 
+def _feed_texts(output_items):
+    """The non-blank item texts /rss serves, in order (what the feed log records)."""
+    texts = []
+    for it in output_items or []:
+        text = it.get("text", "") if isinstance(it, dict) else str(it)
+        if str(text).strip():
+            texts.append(str(text).strip())
+    return texts
+
+
 def save_config(config):
     """Saves config to disk. Auth fields are always stripped from what gets written
     and re-read from the existing file so the app can never change them."""
     with config_lock:
         # Pull current auth off disk (if any) so they survive the write.
         preserved = {}
+        previous_output = None
         try:
             with open(CONFIG_FILE, 'r') as f:
                 on_disk = json.load(f)
             preserved = {k: on_disk[k] for k in _AUTH_KEYS if k in on_disk}
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            previous_output = on_disk.get("output_items")
+        except (FileNotFoundError, json.JSONDecodeError, OSError, AttributeError):
             pass
 
         # Strip auth from whatever was passed in, then put disk values back.
@@ -156,6 +169,12 @@ def save_config(config):
 
         with open(CONFIG_FILE, 'w') as f:
             json.dump(out, f, indent=2)
+
+        # Every write of new ticker content goes through here (routes, the
+        # background refresh and the watcher), so this is where /rss changes.
+        new_texts = _feed_texts(out.get("output_items"))
+        if new_texts != _feed_texts(previous_output):
+            feed_log.record(feed_log.log_path(CONFIG_FILE), new_texts)
 
 def get_config():
     with config_lock:
@@ -1133,6 +1152,10 @@ HTML_TEMPLATE = """
                     <svg class="icon" id="cycle-refresh-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                     <span id="cycle-status-text">Restart Cycle</span>
                 </button>
+                <a href="/feed-log" target="_blank" class="btn" title="Text history of every feed update (last 30 days)">
+                    <svg class="icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+                    <span>Feed Log</span>
+                </a>
                 <a href="/logout" class="btn btn-danger" style="padding: 10px 14px; font-size: 0.85rem;" title="Sign out of control panel">
                     <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
                     <span>Logout</span>
@@ -2057,6 +2080,16 @@ def api_custom_items():
         "output_items": output_items,
         "ticker": ticker_text(output_items),
     })
+
+@app.route('/feed-log')
+def feed_log_view():
+    """Plain-text history of what /rss served, newest first (last 30 days)."""
+    text = feed_log.read(feed_log.log_path(CONFIG_FILE))
+    lines = text.splitlines()
+    lines.reverse()
+    header = "Feed updates, newest first (kept {} days)\n\n".format(feed_log.retention_days())
+    body = "\n".join(lines) if lines else "No feed updates recorded yet."
+    return Response(header + body + "\n", mimetype="text/plain; charset=utf-8")
 
 # ==============================================================================
 # PROPRESENTER INTEGRATION ROUTES
