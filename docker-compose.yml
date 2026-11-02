@@ -1,0 +1,70 @@
+# Deploy with Portainer: Stacks > Add stack > Repository, point it at this repo,
+# compose path "docker-compose.yml", and set the variables below under
+# "Environment variables". Full steps: docs/DOCKER.md
+#
+# Environment variables (all optional unless noted):
+#   AUTH_USERNAME / AUTH_PASSWORD  control panel login (or set them in config.json)
+#   SECRET_KEY        signs login cookies; blank = random key saved in the volume
+#   XML_URL           default live XML source
+#   FEED_LOG_DAYS     days kept in feed_updates.log, default 30
+#   FEED_HOST_PORT    host port for the RSS feed, default 5000
+#   GUI_HOST_PORT     host port for the control panel, default 5001.
+#                     Use 127.0.0.1:5001 to keep it reachable only from this
+#                     machine (e.g. when Cloudflare Tunnel publishes it).
+#   TUNNEL_TOKEN      Cloudflare Tunnel token. Required by the cloudflared
+#                     service; delete that service if you don't use a tunnel.
+#
+# config.json, the activity log and .secret_key live in the "rss-data" volume,
+# which Portainer manages. A fresh volume starts with an empty config: log in
+# and paste the XML link into the control panel.
+#
+# Inside the stack the feed is http://rss-converter:5000 and the panel is
+# http://rss-gui:5001 (use these as Cloudflare Tunnel service URLs).
+
+services:
+  rss-converter:
+    build: .
+    image: rss-converter:latest
+    pull_policy: build        # rebuild from the repo on every deploy/redeploy
+    container_name: rss-converter
+    command: ["python", "app.py"]
+    restart: unless-stopped
+    ports:
+      - "${FEED_HOST_PORT:-5000}:5000"
+    environment:
+      XML_URL: ${XML_URL:-}
+    volumes:
+      - rss-data:/data
+
+  rss-gui:
+    build: .
+    image: rss-converter:latest
+    pull_policy: build
+    container_name: rss-gui
+    command: ["python", "gui.py"]
+    restart: unless-stopped
+    ports:
+      - "${GUI_HOST_PORT:-5001}:5001"
+    environment:
+      SECRET_KEY: ${SECRET_KEY:-}
+      AUTH_USERNAME: ${AUTH_USERNAME:-}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      FEED_LOG_DAYS: ${FEED_LOG_DAYS:-30}
+      XML_URL: ${XML_URL:-}
+    volumes:
+      - rss-data:/data
+    depends_on:
+      - rss-converter
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    command: tunnel --no-autoupdate run
+    restart: unless-stopped
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - rss-gui
+
+volumes:
+  rss-data:

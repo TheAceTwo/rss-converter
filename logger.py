@@ -17,9 +17,11 @@ import logging
 from datetime import datetime
 
 # ---------------------------------------------------------------------------
-# File path for the activity log. Sits next to this script.
+# File path for the activity log. Sits next to this script unless RSS_LOG_FILE
+# is set (the Docker image points it at the /data volume).
 # ---------------------------------------------------------------------------
-LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rss_changes.log')
+LOG_FILE = os.environ.get('RSS_LOG_FILE') or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 'rss_changes.log')
 
 # ---------------------------------------------------------------------------
 # Set up a plain file logger (no extra formatting - we build the line ourselves).
@@ -70,6 +72,15 @@ def log_xml_change(old_url: str, new_url: str) -> None:
     Example: 12:47:44 PM 2026-08-18 [XML] Item 1: [old_url] > [new_url]
     """
     line = f"{_timestamp()} [XML] Item 1: [{old_url}] > [{new_url}]"
+    _logger.info(line)
+
+
+def log_live_toggle(enabled: bool) -> None:
+    """
+    Logs the live XML feed being switched on or off air.
+    Example: 12:47:44 PM 2026-08-18 [XML] live feed turned OFF
+    """
+    line = f"{_timestamp()} [XML] live feed turned {'ON' if enabled else 'OFF'}"
     _logger.info(line)
 
 

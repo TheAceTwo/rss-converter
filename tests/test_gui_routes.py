@@ -113,13 +113,75 @@ def test_manual_trigger_without_prop_returns_502(logged_in_client):
     assert "prop" in res.get_json()["error"].lower()
 
 
-def test_save_output_notifies_watcher(logged_in_client, monkeypatch):
+def test_custom_items_save_rebuilds_output_and_notifies(logged_in_client, tmp_config, monkeypatch):
     import gui
     calls = []
     monkeypatch.setattr(gui.ticker_watcher, "notify_change", lambda: calls.append(1))
-    res = logged_in_client.post("/api/save_output", json={"items": [{"source": "custom", "id": "", "text": "Hi"}]})
+    res = logged_in_client.post("/api/custom_items", json={"items": [
+        {"text": "Hi", "enabled": True},
+        {"text": "Hidden", "enabled": False},
+    ]})
     assert res.status_code == 200
+    body = res.get_json()
+    assert body["output_items"] == [{"source": "custom", "id": "", "text": "Hi"}]
     assert calls == [1]
+    saved = json.loads(tmp_config.read_text())
+    assert saved["custom_items"] == [{"text": "Hi", "enabled": True}, {"text": "Hidden", "enabled": False}]
+    assert saved["output_items"] == [{"source": "custom", "id": "", "text": "Hi"}]
+    assert saved["auth_username"] == "tester"
+
+
+def test_custom_items_rejects_bad_body(logged_in_client):
+    res = logged_in_client.post("/api/custom_items", json={"items": "nope"})
+    assert res.status_code == 400
+
+
+def test_custom_items_keep_live_items_first(logged_in_client, tmp_config):
+    cfg = json.loads(tmp_config.read_text())
+    cfg["output_items"] = [{"source": "live", "id": "a|b", "text": "A 1 B 0"}]
+    tmp_config.write_text(json.dumps(cfg))
+    res = logged_in_client.post("/api/custom_items", json={"items": [{"text": "After", "enabled": True}]})
+    assert [it["text"] for it in res.get_json()["output_items"]] == ["A 1 B 0", "After"]
+
+
+def test_live_toggle_off_leaves_only_custom(logged_in_client, tmp_config, monkeypatch):
+    import gui
+    monkeypatch.setattr(gui.ticker_watcher, "notify_change", lambda: None)
+    cfg = json.loads(tmp_config.read_text())
+    cfg["live_link"] = "http://example.test/feed.xml"
+    cfg["custom_items"] = [{"text": "Custom", "enabled": True}]
+    cfg["output_items"] = [{"source": "live", "id": "a|b", "text": "A 1 B 0"}]
+    tmp_config.write_text(json.dumps(cfg))
+    live = [{"id": "a|b", "title": "A 2 B 0", "source": "live"}]
+    monkeypatch.setattr(gui, "fetch_live_data", lambda link: (live, {}, None))
+
+    res = logged_in_client.post("/api/live_enabled", json={"enabled": False})
+    body = res.get_json()
+    assert body["live_enabled"] is False
+    assert body["output_items"] == [{"source": "custom", "id": "", "text": "Custom"}]
+    assert body["live_items"] == live   # still previewed in the panel while off air
+    assert json.loads(tmp_config.read_text())["live_enabled"] is False
+
+
+def test_live_toggle_on_puts_every_feed_item_first(logged_in_client, tmp_config, monkeypatch):
+    import gui
+    monkeypatch.setattr(gui.ticker_watcher, "notify_change", lambda: None)
+    cfg = json.loads(tmp_config.read_text())
+    cfg["live_link"] = "http://example.test/feed.xml"
+    cfg["live_enabled"] = False
+    cfg["custom_items"] = [{"text": "Custom", "enabled": True}]
+    tmp_config.write_text(json.dumps(cfg))
+    live = [{"id": "x", "title": "Game 1", "source": "live"}, {"id": "y", "title": "Game 2", "source": "live"}]
+    monkeypatch.setattr(gui, "fetch_live_data", lambda link: (live, {}, None))
+
+    body = logged_in_client.post("/api/live_enabled", json={"enabled": True}).get_json()
+    assert [it["text"] for it in body["output_items"]] == ["Game 1", "Game 2", "Custom"]
+
+
+def test_index_renders_toggles(logged_in_client):
+    res = logged_in_client.get("/")
+    assert b'id="live-enabled-toggle"' in res.data
+    assert b"Custom Boxes" in res.data
 
 
 def test_routes_require_login(tmp_config):
@@ -136,3 +198,46 @@ def test_index_renders_propresenter_card(logged_in_client):
     assert b'id="pp-host"' in res.data
     assert b"ppTriggerNow" in res.data
     assert res.data.count(b'<input type="radio" name="pp-mode"') == 3
+
+
+def test_auth_falls_back_to_environment(monkeypatch):
+    import gui
+    monkeypatch.setenv("AUTH_USERNAME", "envuser")
+    monkeypatch.setenv("AUTH_PASSWORD", "envpass")
+    assert gui.get_auth_credentials({}) == ("envuser", "envpass")
+    # config.json wins when it has both values
+    assert gui.get_auth_credentials({"auth_username": "a", "auth_password": "b"}) == ("a", "b")
+
+
+def test_auth_env_unset_means_setup_page(tmp_config, monkeypatch):
+    import gui
+    monkeypatch.delenv("AUTH_USERNAME", raising=False)
+    monkeypatch.delenv("AUTH_PASSWORD", raising=False)
+    tmp_config.write_text(json.dumps({"live_link": ""}))
+    res = gui.app.test_client().get("/")
+    assert res.status_code == 302
+    assert "/setup" in res.headers["Location"]
+
+
+def test_blank_secret_key_generates_and_persists_one(tmp_path, monkeypatch):
+    import gui
+    monkeypatch.setenv("SECRET_KEY", "  ")
+    monkeypatch.setattr(gui, "CONFIG_FILE", str(tmp_path / "config.json"))
+    first = gui.load_secret_key()
+    assert len(first) >= 32
+    assert (tmp_path / ".secret_key").read_text().strip() == first
+    assert gui.load_secret_key() == first      # same key after a restart
+
+
+def test_secret_key_env_wins(monkeypatch):
+    import gui
+    monkeypatch.setenv("SECRET_KEY", "from-env")
+    assert gui.load_secret_key() == "from-env"
+
+
+def test_login_post_succeeds(tmp_config):
+    import gui
+    client = gui.app.test_client()
+    res = client.post("/login", data={"username": "tester", "password": "secret"})
+    assert res.status_code == 302
+    assert res.headers["Location"].endswith("/")

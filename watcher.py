@@ -14,7 +14,7 @@ import time
 
 import logger as activity_log
 import propresenter
-from output_resolver import resolve_output_items, ticker_text
+from output_resolver import build_output_items, ticker_settings, ticker_text
 
 
 class TickerWatcher:
@@ -39,17 +39,19 @@ class TickerWatcher:
         """One poll cycle. Returns True if the combined ticker text changed."""
         config = self.get_config()
         live_link = config.get("live_link") or ""
-        raw_output = config.get("output_items")
-        if raw_output is None:
-            raw_output = list(config.get("custom_items") or [])
+        live_enabled, custom_items = ticker_settings(config)
+        previous_output = config.get("output_items")
 
-        live_items, items_by_id, error = self.fetch_live_data(live_link)
-        if error:
-            self.last_status["last_error"] = error
-        activity_log.log_live_items_change([it["title"] for it in live_items])
+        live_items, error = [], None
+        if live_enabled and live_link.strip():
+            live_items, _items_by_id, error = self.fetch_live_data(live_link)
+            if error:
+                self.last_status["last_error"] = error
+            activity_log.log_live_items_change([it["title"] for it in live_items])
 
-        resolved = resolve_output_items(raw_output, live_items, items_by_id)
-        if resolved != raw_output:
+        resolved = build_output_items(live_enabled, live_items, custom_items,
+                                      previous_output, live_ok=error is None)
+        if resolved != previous_output:
             config["output_items"] = resolved
             try:
                 self.save_config(config)

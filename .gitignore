@@ -5,3 +5,8 @@ rss_changes.log
 venv/
 .venv/
 .pytest_cache/
+rss-converter.env
+logs/
+.env
+.secret_key
+feed_updates.log
