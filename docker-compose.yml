@@ -2,9 +2,9 @@
 # compose path "docker-compose.yml". Set the variables below under
 # "Environment variables". Full steps: docs/DOCKER.md
 #
-# Ports inside the containers are fixed (feed 5050, panel 5001). The host side
-# is configurable; the feed defaults to 5000 so existing ProPresenter
-# Linked Text URLs (http://<docker-host>:5000/rss) keep working.
+# Ports inside the containers are fixed (feed 5000, panel 5001), same as older
+# versions, so existing ProPresenter URLs (http://<docker-host>:5000/rss) and
+# tunnel routes keep working. The host side is configurable.
 
 services:
   feed:
@@ -12,7 +12,7 @@ services:
     command: ["python", "app.py"]
     restart: unless-stopped
     ports:
-      - "${FEED_HOST_PORT:-5000}:5050"
+      - "${FEED_HOST_PORT:-5000}:5000"
     environment:
       XML_URL: ${XML_URL:-}
     volumes:

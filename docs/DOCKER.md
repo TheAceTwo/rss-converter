@@ -14,12 +14,12 @@
 
 | Service | Runs | Container port | Host port (default) | Variable for host port |
 |---|---|---|---|---|
-| `feed` | `app.py`, the RSS feed for ProPresenter | 5050 | **5000** | `FEED_HOST_PORT` |
+| `feed` | `app.py`, the RSS feed for ProPresenter | 5000 | **5000** | `FEED_HOST_PORT` |
 | `gui` | `gui.py`, the control panel + background watcher | 5001 | **5001** | `GUI_HOST_PORT` |
 
-The feed's host port defaults to **5000** in Docker so an existing ProPresenter Linked Text URL of
-`http://<docker-host>:5000/rss` keeps working. (On a Mac the feed uses 5050 because macOS's AirPlay
-Receiver holds 5000.)
+In Docker the feed stays on **5000**, inside and outside the container, exactly as before, so an existing
+ProPresenter Linked Text URL of `http://<docker-host>:5000/rss` and any tunnel route to `rss-converter:5000`
+keep working. (Only on a Mac does the feed default to 5050, because macOS's AirPlay Receiver holds 5000.)
 
 Both services share a named volume, `rss-data`, mounted at `/data`. It holds `config.json` (feed URL,
 custom boxes, ProPresenter settings) and `rss_changes.log`, so settings survive redeploys and image updates.
@@ -62,14 +62,28 @@ Your settings in the `rss-data` volume are kept either way.
 
 ### Coming from an older Portainer stack
 
-If your existing stack used its own compose file pasted into Portainer's web editor, replace it with
-the repository method above. Two things to check:
+Older stacks ran the stock `python` image with the code bind-mounted from a host folder, for example:
 
-- **Ports:** the feed now listens on 5050 *inside* the container. This compose file maps it to host
-  port 5000 for you; if you keep your own compose file, map `5000:5050` (or set `FEED_PORT=5000` in the container).
-- **Config location:** the image stores `config.json` in `/data`. To keep your old settings, copy your
-  old `config.json` into the new `rss-data` volume (or mount your old folder at `/data`). Older
-  configs upgrade automatically on first start.
+```yaml
+  rss-converter:
+    image: python:3.11-alpine
+    volumes:
+      - C:\docker\rss-converter:/app
+    command: sh -c "pip install -r requirements.txt && python app.py"
+```
+
+That style still works with the current `main`. Change two things:
+
+1. **Add `FEED_PORT=5000`** to the feed service's `environment`. Outside Docker the feed now defaults to
+   5050, so without this the `5000:5000` mapping points at nothing.
+2. **Add `SECRET_KEY`** (and optionally `AUTH_USERNAME` / `AUTH_PASSWORD`) to the GUI service's `environment`.
+
+`config.json` and `rss_changes.log` stay in the mounted folder, as before. Older configs upgrade
+automatically the first time the control panel starts.
+
+Before you `git pull` the new code into that folder, back up `rss_changes.log`: it used to be committed
+to the repo and is now ignored, so the pull deletes the tracked copy. Copy it back afterwards; git
+leaves it alone from then on.
 
 ## Plain Docker Compose (no Portainer)
 

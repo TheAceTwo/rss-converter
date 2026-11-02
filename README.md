@@ -88,7 +88,7 @@ Configs from older versions upgrade automatically: custom presets that were on a
 ProPresenter loads an RSS Linked Text source only when its prop is triggered and never re-polls. This tool re-triggers the prop for you whenever the ticker content changes.
 
 1. In ProPresenter: Settings > Network, turn on **Enable Network**, note the IP and port.
-2. In ProPresenter: build the ticker as a **Prop** with a Scrolling Text object whose Linked Text is RSS pointing at `http://<this-machine>:5050/rss`.
+2. In ProPresenter: build the ticker as a **Prop** with a Scrolling Text object whose Linked Text is RSS pointing at `http://<this-machine>:5050/rss` (Mac) or `http://<docker-host>:5000/rss` (Docker).
 3. In the control panel, under the live URL: enter the IP and port, click **Test Connection**, choose the ticker prop.
 4. Pick a refresh mode and press **Trigger Now** to preview each one live on the output screen. Trigger Now uses whatever mode is selected, saved or not, so you can compare all three in a minute:
    - **Trigger only**: the scroll restarts from the first item in place.
