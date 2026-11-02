@@ -7,7 +7,7 @@ import urllib.request
 # pyrefly: ignore [missing-import]
 from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
 import logger as activity_log
-from output_resolver import resolve_output_items, ticker_text
+from output_resolver import build_output_items, ticker_settings, ticker_text
 import propresenter
 from watcher import TickerWatcher
 
@@ -24,6 +24,12 @@ config_lock = threading.Lock()
 # ==============================================================================
 # DEFAULT CONFIGURATION
 # - live_link: XML/RSS source link. Leave empty ("") if using custom text items only.
+# - live_enabled: When on, every item from the live XML feed goes on air
+#   automatically, in feed order. Off = only custom boxes go on air.
+# - custom_items: Custom text boxes, [{"text": str, "enabled": bool}]. Boxes
+#   that are switched on are shown after the live feed, top to bottom.
+# - output_items: The computed ticker (live items, then enabled custom boxes)
+#   that app.py serves at /rss. Rebuilt by this app; never edited by hand.
 # - enable_spacer: Appends a blank item to the RSS feed for smooth ticker looping.
 # - auth_username & auth_password: These are NOT included in the defaults.
 #   They can ONLY be set by manually editing config.json.
@@ -32,8 +38,9 @@ config_lock = threading.Lock()
 # ==============================================================================
 DEFAULT_CONFIG = {
     "live_link": DEFAULT_LIVE_LINK,
+    "live_enabled": True,
     "enable_spacer": True,
-    "custom_items": [""],
+    "custom_items": [],
     "output_items": []
 }
 
@@ -1016,6 +1023,43 @@ HTML_TEMPLATE = """
         .pp-status.ok { color: #4ade80; }
         .pp-status.err { color: #f87171; }
         .btn-sm { padding: 6px 12px; font-size: 0.8rem; white-space: nowrap; }
+
+        /* ---- On/off switches ---- */
+        .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; flex-shrink: 0; user-select: none; }
+        .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+        .switch-track { position: relative; width: 36px; height: 20px; background: #3a3a3a; border: 1px solid #4a4a4a; border-radius: 999px; transition: background 0.15s ease, border-color 0.15s ease; }
+        .switch-thumb { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; background: #bbb; border-radius: 50%; transition: transform 0.15s ease, background 0.15s ease; }
+        .switch input:checked + .switch-track { background: #1b6329; border-color: #2b8a3e; }
+        .switch input:checked + .switch-track .switch-thumb { transform: translateX(16px); background: #fff; }
+        .switch input:focus-visible + .switch-track { outline: 2px solid #0088ff; outline-offset: 2px; }
+        .switch-lg .switch-track { width: 44px; height: 24px; }
+        .switch-lg .switch-thumb { width: 18px; height: 18px; }
+        .switch-lg input:checked + .switch-track .switch-thumb { transform: translateX(20px); }
+        .switch-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.5px; color: #888; min-width: 48px; }
+        .switch input:checked ~ .switch-label { color: #4ade80; }
+
+        /* ---- Live feed panel ---- */
+        .live-card { display: flex; align-items: center; gap: 10px; background: #1b2533; border: 1px solid #2c4159; border-radius: 5px; padding: 10px 12px; }
+        #live-panel.is-off .live-card { opacity: 0.4; background: #222; border-color: #333; }
+        #live-panel.is-off .live-card .card-text { text-decoration: line-through; }
+        .off-notice { background: #2a2210; border: 1px solid #6b5416; color: #f5d27a; padding: 10px 12px; border-radius: 6px; font-size: 0.85rem; margin-bottom: 12px; }
+        .list-empty { padding: 20px; text-align: center; color: #666; font-style: italic; }
+
+        /* ---- Custom boxes ---- */
+        .custom-row.is-off .custom-text { opacity: 0.45; }
+        .row-move { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+        .btn-move { background: #2a2a2a; border: 1px solid #3a3a3a; color: #aaa; font-size: 0.55rem; line-height: 1; padding: 2px 6px; border-radius: 3px; cursor: pointer; }
+        .btn-move:hover { background: #333; color: #fff; }
+        .output-item-card { cursor: default; }
+        .output-item-card:active { cursor: default; }
+        .grid > .panel { min-width: 0; }
+        @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+        @media (max-width: 700px) {
+            .header { flex-wrap: wrap; gap: 12px; }
+            .controls { flex-wrap: wrap; }
+            .panel-header { flex-wrap: wrap; gap: 8px; }
+            .ticker-speed-control { display: none; }
+        }
     </style>
 </head>
 <body>
@@ -1058,19 +1102,20 @@ HTML_TEMPLATE = """
         {% endif %}
 
         <div class="grid">
-            <!-- Box 1: Incoming Live Link Data (Source 1) -->
-            <div class="panel">
+            <!-- Panel 1: Live XML feed. Every item goes on air automatically, first. -->
+            <div class="panel{% if not live_enabled %} is-off{% endif %}" id="live-panel">
                 <div class="panel-header">
                     <h3>
                         <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.2 19.1 19.1"/></svg>
-                        <span>Incoming Live Link</span>
+                        <span>Live XML Feed</span>
                     </h3>
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        <button type="button" class="btn-quick-add" onclick="addAllLiveToOutput()" title="Add all live items to output" style="opacity:1; padding: 4px 10px; font-size:0.8rem;">
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                            <span>Add All</span>
-                        </button>
+                    <div style="display:flex; align-items:center; gap:10px;">
                         <span class="item-count-badge" id="live-count">{{ live_items|length }} Items</span>
+                        <label class="switch switch-lg" title="Turn the live XML feed on or off air">
+                            <input type="checkbox" id="live-enabled-toggle" {% if live_enabled %}checked{% endif %} onchange="setLiveEnabled(this.checked)">
+                            <span class="switch-track"><span class="switch-thumb"></span></span>
+                            <span class="switch-label" id="live-enabled-label">{% if live_enabled %}ON AIR{% else %}OFF{% endif %}</span>
+                        </label>
                     </div>
                 </div>
                 <form action="/save_live_link" method="POST" style="margin-bottom: 12px; display: flex; gap: 8px;">
@@ -1080,6 +1125,98 @@ HTML_TEMPLATE = """
                         <span>Save URL</span>
                     </button>
                 </form>
+
+                <div class="instructions-hint" id="live-hint-on" {% if not live_enabled %}style="display:none;"{% endif %}>
+                    Every item from this feed is on air automatically, in feed order, and refreshes every 15 seconds.
+                </div>
+                <div class="off-notice" id="live-hint-off" {% if live_enabled %}style="display:none;"{% endif %}>
+                    The XML feed is <strong>off air</strong>. Only custom boxes that are switched on are in the ticker.
+                </div>
+
+                <div class="item-list" id="live-items-list">
+                    {% for item in live_items %}
+                        <div class="live-card">
+                            <span class="card-index">{{ loop.index }}.</span>
+                            <span class="card-text">{{ item.title }}</span>
+                        </div>
+                    {% else %}
+                        <div class="list-empty">No live items currently available.</div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Panel 2: Custom boxes. Switched-on boxes go on air after the feed. -->
+            <div class="panel" id="custom-panel">
+                <div class="panel-header">
+                    <h3>
+                        <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                        <span>Custom Boxes</span>
+                    </h3>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span class="item-count-badge" id="save-status" style="background: transparent; color: #4ade80; font-size: 0.7rem; display: none;">✓ Saved</span>
+                        <span class="item-count-badge" id="custom-count">0 On</span>
+                    </div>
+                </div>
+                <div class="instructions-hint">
+                    Shown <strong>after the live feed</strong>, top to bottom. Switch a box on to put it on air. Changes save automatically.
+                </div>
+
+                <div class="item-list" id="custom-items-container">
+                    {% for item in custom_items %}
+                        <div class="custom-row{% if not item.enabled %} is-off{% endif %}">
+                            <label class="switch" title="Put this box on or off air">
+                                <input type="checkbox" class="custom-enabled" {% if item.enabled %}checked{% endif %}>
+                                <span class="switch-track"><span class="switch-thumb"></span></span>
+                            </label>
+                            <input type="text" class="custom-input custom-text" value="{{ item.text }}" placeholder="Custom ticker text..." maxlength="500">
+                            <div class="row-move">
+                                <button type="button" class="btn-move" data-dir="-1" title="Move up">&#9650;</button>
+                                <button type="button" class="btn-move" data-dir="1" title="Move down">&#9660;</button>
+                            </div>
+                            <button type="button" class="btn-remove" title="Delete box">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                            </button>
+                        </div>
+                    {% endfor %}
+                </div>
+                <div class="list-empty" id="custom-empty" {% if custom_items %}style="display:none;"{% endif %}>No custom boxes yet.</div>
+
+                <button type="button" class="btn-add" onclick="addCustomRow()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    <span>Add Custom Box</span>
+                </button>
+            </div>
+
+            <!-- Panel 3: What is on air right now, plus ProPresenter -->
+            <div class="panel panel-output">
+                <div class="panel-header">
+                    <h3>
+                        <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+                        <span>On Air</span>
+                    </h3>
+                    <span class="item-count-badge" id="output-count" style="background:#0066cc; color:#fff;">{{ output_items|length }} Active</span>
+                </div>
+                <div class="instructions-hint">
+                    Exactly what the RSS feed sends to ProPresenter, in order: live feed first, then custom boxes.
+                </div>
+
+                <div class="item-list" id="output-items-container">
+                    {% for item in output_items %}
+                        <div class="output-item-card">
+                            <div class="card-content">
+                                <span class="card-index">{{ loop.index }}.</span>
+                                {% if item.source == 'live' %}
+                                    <span class="badge-source badge-source-live">LIVE</span>
+                                {% else %}
+                                    <span class="badge-source badge-source-custom">TEXT</span>
+                                {% endif %}
+                                <span class="card-text">{{ item.text }}</span>
+                            </div>
+                        </div>
+                    {% else %}
+                        <div class="list-empty">Nothing on air. Turn on the XML feed or a custom box.</div>
+                    {% endfor %}
+                </div>
 
                 <!-- ProPresenter auto-trigger -->
                 <div class="pp-card">
@@ -1123,171 +1260,6 @@ HTML_TEMPLATE = """
                         <span class="pp-status" id="pp-status"></span>
                     </div>
                 </div>
-
-                <div class="instructions-hint">
-                    Drag any item box below into the <strong>Output Feed</strong> on the right.
-                </div>
-                
-                <div class="item-list" id="live-items-list">
-                    {% for item in live_items %}
-                        <div class="draggable-card" 
-                             draggable="true" 
-                             data-source="live" 
-                             data-id="{{ item.id }}"
-                             data-text="{{ item.title }}"
-                             ondragstart="handleSourceDragStart(event, this)">
-                            <div class="card-content">
-                                <span class="drag-handle" title="Drag to Output Box">
-                                    <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor"><circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/><circle cx="2" cy="7" r="1.5"/><circle cx="8" cy="7" r="1.5"/><circle cx="2" cy="12" r="1.5"/><circle cx="8" cy="12" r="1.5"/></svg>
-                                </span>
-                                <span class="card-index">{{ loop.index }}.</span>
-                                <span class="card-text">{{ item.title }}</span>
-                            </div>
-                            <button type="button" class="btn-quick-add" onclick="addLiveItemToOutput('{{ item.id|replace("'", "\\'") }}', '{{ item.title|replace("'", "\\'") }}')" title="Quick add to output">
-                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                                <span>Add</span>
-                            </button>
-                        </div>
-                    {% else %}
-                        <div style="padding: 20px; text-align: center; color: #666; font-style: italic;">
-                            No live items currently available.
-                        </div>
-                    {% endfor %}
-                </div>
-                <p class="status-text">
-                    Pulling live items dynamically from configured XML feed.
-                </p>
-            </div>
-
-            <!-- Box 2: Custom Text Editor (Source 2) -->
-            <div class="panel">
-                <div class="panel-header">
-                    <h3>
-                        <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                        <span>Custom Text Feed</span>
-                    </h3>
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        <button type="button" class="btn-quick-add" onclick="addAllCustomToOutput()" title="Add all custom items to output" style="opacity:1; padding: 4px 10px; font-size:0.8rem;">
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                            <span>Add All</span>
-                        </button>
-                        <span class="item-count-badge" id="custom-count">{{ custom_items|length }} Presets</span>
-                    </div>
-                </div>
-                <div class="instructions-hint">
-                    Type messages, drag them to Output, or save presets.
-                </div>
-                
-                <form action="/save_custom" method="POST" id="custom-form" style="display: flex; flex-direction: column; flex: 1;">
-                    <div class="item-list" id="custom-items-container">
-                        {% for item in custom_items %}
-                            <div class="custom-row" 
-                                 draggable="true" 
-                                 data-source="custom"
-                                 data-custom-id="custom_{{ loop.index0 }}"
-                                 data-text="{{ item }}"
-                                 ondragstart="handleCustomDragStart(event, this)">
-                                <span class="drag-handle" title="Drag to Output Box">
-                                    <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor"><circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/><circle cx="2" cy="7" r="1.5"/><circle cx="8" cy="7" r="1.5"/><circle cx="2" cy="12" r="1.5"/><circle cx="8" cy="12" r="1.5"/></svg>
-                                </span>
-                                <input type="text" 
-                                       name="custom_item" 
-                                       class="custom-input" 
-                                       value="{{ item }}" 
-                                       placeholder="Custom ticker text {{ loop.index }}..."
-                                       oninput="handleCustomInputChange(this)">
-                                <button type="button" class="btn-quick-add" onclick="addCustomInputToOutput(this)" title="Quick add to output feed">
-                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                                    <span>Add</span>
-                                </button>
-                                <button type="button" class="btn-remove" onclick="removeCustomRow(this)" title="Delete box">
-                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                                </button>
-                            </div>
-                        {% endfor %}
-                    </div>
-                    
-                    <button type="button" class="btn-add" onclick="addCustomRow()">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                        <span>Add Custom Text Box</span>
-                    </button>
-                    <button type="submit" class="btn" style="width: 100%;">
-                        <svg class="icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-                        <span>Save Custom Presets</span>
-                    </button>
-                </form>
-                <p class="status-text">
-                    Custom text presets are stored and ready to drag into the output feed anytime.
-                </p>
-            </div>
-            
-            <!-- Box 3: Final Output Feed (Target Drop Zone) -->
-            <div class="panel panel-output">
-                <div class="panel-header">
-                    <h3>
-                        <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
-                        <span>Active Output Feed</span>
-                    </h3>
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        <button type="button" class="btn-clear-all" onclick="forceUpdateOutput()" title="Force save output to RSS feed now" style="background: rgba(0,102,204,0.15); border-color: #0066cc; color: #5bb8ff;">
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-                            <span>Force Update</span>
-                        </button>
-                        <button type="button" class="btn-clear-all" onclick="clearAllOutput()" title="Clear all items from output">
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                            <span>Clear All</span>
-                        </button>
-                        <span class="item-count-badge" id="output-count" style="background:#0066cc; color:#fff;">{{ output_items|length }} Active</span>
-                        <span class="item-count-badge" id="save-status" style="background: transparent; color: #4ade80; font-size: 0.7rem; display: none;">✓ Saved</span>
-                    </div>
-                </div>
-                <div class="instructions-hint">
-                    Drop items here from Live Feed or Custom Text. Drag to reorder, click remove to delete. Changes auto-save.
-                </div>
-                
-                    <div class="item-list output-drop-zone" 
-                         id="output-items-container"
-                         ondragover="handleOutputDragOver(event)"
-                         ondragenter="handleOutputDragEnter(event)"
-                         ondragleave="handleOutputDragLeave(event)"
-                         ondrop="handleOutputDrop(event)">
-                        
-                        {% for item in output_items %}
-                            <div class="output-item-card" 
-                                 draggable="true" 
-                                 data-source="{{ item.source }}"
-                                 data-id="{{ item.id }}"
-                                 data-text="{{ item.text }}"
-                                 ondragstart="handleOutputItemDragStart(event, this)"
-                                 ondragend="handleOutputItemDragEnd(event, this)">
-                                <input type="hidden" name="output_item_data" value='{"source":"{{ item.source }}","id":"{{ item.id|replace("'", "\\'") }}","text":"{{ item.text|replace("'", "\\'") }}"}'>
-                                <input type="hidden" name="output_item" value="{{ item.text }}">
-                                <div class="card-content">
-                                    <span class="drag-handle" title="Drag to reorder">
-                                        <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor"><circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/><circle cx="2" cy="7" r="1.5"/><circle cx="8" cy="7" r="1.5"/><circle cx="2" cy="12" r="1.5"/><circle cx="8" cy="12" r="1.5"/></svg>
-                                    </span>
-                                    <span class="card-index">{{ loop.index }}.</span>
-                                    {% if item.source == 'live' %}
-                                        <span class="badge-source badge-source-live" title="Dynamically updates from live RSS feed">LIVE</span>
-                                    {% else %}
-                                        <span class="badge-source badge-source-custom" title="Custom static text">TEXT</span>
-                                    {% endif %}
-                                    <span class="card-text">{{ item.text }}</span>
-                                </div>
-                                <button type="button" class="btn-remove" onclick="removeOutputRow(this)" title="Remove from output feed">
-                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                                </button>
-                            </div>
-                        {% endfor %}
-                        
-                        <div class="empty-placeholder" id="output-empty-msg" style="{% if output_items %}display: none;{% endif %}">
-                            <svg width="40" height="40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
-                            </svg>
-                            <div><strong>Drop boxes here</strong></div>
-                            <div style="font-size: 0.8rem; margin-top: 4px; color: #556677;">Drag live or custom items here to build your output feed</div>
-                        </div>
-                    </div>
             </div>
         </div>
     </div>
@@ -1309,369 +1281,212 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-        let draggedData = null;
-        let draggedElement = null;
-        let isReorderingOutput = false;
+        // ------------------------------------------------------------------
+        // Ticker model: live XML items first (when the feed is on), then the
+        // custom boxes that are switched on, top to bottom. The server builds
+        // the real output; this page only edits settings and shows results.
+        // ------------------------------------------------------------------
+        let isFetchingLive = false;
+        let refreshCycleInterval = null;
 
-        // --- Box 1: Live Feed Drag Handlers ---
-        function handleSourceDragStart(e, el) {
-            const text = el.getAttribute('data-text');
-            const id = el.getAttribute('data-id') || '';
-            draggedData = { source: 'live', id: id, text: text };
-            draggedElement = el;
-            isReorderingOutput = false;
-            e.dataTransfer.setData('application/json', JSON.stringify(draggedData));
-            e.dataTransfer.setData('text/plain', text);
-            e.dataTransfer.effectAllowed = 'copy';
-            el.classList.add('dragging');
-            setTimeout(() => el.classList.remove('dragging'), 0);
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
         }
 
-        // --- Box 2: Custom Text Drag Handlers ---
-        function handleCustomDragStart(e, el) {
-            const input = el.querySelector('input');
-            const text = (input ? input.value : '').trim();
-            if (!text) {
-                e.preventDefault();
+        // --- Live XML feed panel ---
+        function renderLiveItems(items) {
+            const list = document.getElementById('live-items-list');
+            const badge = document.getElementById('live-count');
+            if (badge) badge.textContent = `${items.length} Items`;
+            if (!list) return;
+            if (!items.length) {
+                list.innerHTML = '<div class="list-empty">No live items currently available.</div>';
                 return;
             }
-            const customId = el.getAttribute('data-custom-id') || '';
-            draggedData = { source: 'custom', id: customId, text: text };
-            draggedElement = el;
-            isReorderingOutput = false;
-            e.dataTransfer.setData('application/json', JSON.stringify(draggedData));
-            e.dataTransfer.setData('text/plain', text);
-            e.dataTransfer.effectAllowed = 'copy';
-            el.classList.add('dragging');
-            setTimeout(() => el.classList.remove('dragging'), 0);
+            list.innerHTML = items.map((it, i) =>
+                `<div class="live-card"><span class="card-index">${i + 1}.</span><span class="card-text">${escapeHtml(it.title)}</span></div>`
+            ).join('');
         }
 
-        function handleCustomInputChange(input) {
-            const row = input.closest('.custom-row');
-            if (!row) return;
-            const customId = row.getAttribute('data-custom-id') || '';
-            const newText = input.value;
-            row.setAttribute('data-text', newText);
-
-            if (customId) {
-                const outputCards = document.querySelectorAll(`#output-items-container .output-item-card[data-source="custom"][data-id="${customId}"]`);
-                outputCards.forEach(card => {
-                    card.setAttribute('data-text', newText);
-                    const textSpan = card.querySelector('.card-text');
-                    if (textSpan) textSpan.textContent = newText;
-                    const hiddenItem = card.querySelector('input[name="output_item"]');
-                    if (hiddenItem) hiddenItem.value = newText;
-                    const hiddenData = card.querySelector('input[name="output_item_data"]');
-                    if (hiddenData) hiddenData.value = JSON.stringify({ source: 'custom', id: customId, text: newText });
-                });
-                updateTickerPreview();
-                autoSaveOutput();
-            }
+        function renderLiveEnabled(enabled) {
+            const panel = document.getElementById('live-panel');
+            const toggle = document.getElementById('live-enabled-toggle');
+            const label = document.getElementById('live-enabled-label');
+            if (panel) panel.classList.toggle('is-off', !enabled);
+            if (toggle) toggle.checked = enabled;
+            if (label) label.textContent = enabled ? 'ON AIR' : 'OFF';
+            document.getElementById('live-hint-on').style.display = enabled ? '' : 'none';
+            document.getElementById('live-hint-off').style.display = enabled ? 'none' : '';
         }
 
-        let customIdCounter = Date.now();
-        function addCustomRow() {
-            const container = document.getElementById('custom-items-container');
-            const count = container.querySelectorAll('.custom-row').length + 1;
-            const customId = 'custom_' + (customIdCounter++);
-            const div = document.createElement('div');
-            div.className = 'custom-row';
-            div.draggable = true;
-            div.setAttribute('data-source', 'custom');
-            div.setAttribute('data-custom-id', customId);
-            div.setAttribute('data-text', '');
-            div.ondragstart = function(e) { handleCustomDragStart(e, this); };
-            div.innerHTML = `
-                <span class="drag-handle" title="Drag to Output Box">
-                    <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor"><circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/><circle cx="2" cy="7" r="1.5"/><circle cx="8" cy="7" r="1.5"/><circle cx="2" cy="12" r="1.5"/><circle cx="8" cy="12" r="1.5"/></svg>
-                </span>
-                <input type="text" name="custom_item" class="custom-input" placeholder="Custom ticker text ${count}..." oninput="handleCustomInputChange(this)">
-                <button type="button" class="btn-quick-add" onclick="addCustomInputToOutput(this)" title="Quick add to output feed">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                    <span>Add</span>
-                </button>
-                <button type="button" class="btn-remove" onclick="removeCustomRow(this)" title="Delete box">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-            `;
-            container.appendChild(div);
-            updateCustomCount();
-            div.querySelector('input').focus();
-        }
-
-        function addCustomInputToOutput(btn) {
-            const row = btn.closest('.custom-row');
-            if (!row) return;
-            const input = row.querySelector('input');
-            if (!input || !input.value.trim()) return;
-            const customId = row.getAttribute('data-custom-id') || '';
-            addItemToOutput({ source: 'custom', id: customId, text: input.value.trim() });
-        }
-
-        function removeCustomRow(btn) {
-            const container = document.getElementById('custom-items-container');
-            const rows = container.querySelectorAll('.custom-row');
-            if (rows.length > 1) {
-                btn.parentElement.remove();
-            } else {
-                const input = btn.parentElement.querySelector('input');
-                if (input) input.value = '';
-            }
-            updateCustomCount();
-        }
-
-        function updateCustomCount() {
-            const count = document.querySelectorAll('#custom-items-container .custom-row').length;
-            const badge = document.getElementById('custom-count');
-            if (badge) badge.textContent = `${count} Presets`;
-        }
-
-        function addAllLiveToOutput() {
-            const cards = document.querySelectorAll('#live-items-list .draggable-card');
-            cards.forEach(card => {
-                const id = card.getAttribute('data-id') || '';
-                const text = card.getAttribute('data-text');
-                if (text && text.trim()) {
-                    addItemToOutput({ source: 'live', id: id, text: text.trim() });
-                }
-            });
-        }
-
-        function addAllCustomToOutput() {
-            const rows = document.querySelectorAll('#custom-items-container .custom-row');
-            rows.forEach(row => {
-                const customId = row.getAttribute('data-custom-id') || '';
-                const input = row.querySelector('input');
-                if (input && input.value.trim()) {
-                    addItemToOutput({ source: 'custom', id: customId, text: input.value.trim() });
-                }
-            });
-        }
-
-        // --- Box 3: Output Box Reordering & Drop Handlers ---
-        function handleOutputItemDragStart(e, el) {
-            draggedElement = el;
-            const text = el.getAttribute('data-text') || '';
-            const source = el.getAttribute('data-source') || 'custom';
-            const id = el.getAttribute('data-id') || '';
-            draggedData = { source: source, id: id, text: text };
-            isReorderingOutput = true;
-            e.dataTransfer.setData('application/json', JSON.stringify(draggedData));
-            e.dataTransfer.setData('text/plain', text);
-            e.dataTransfer.effectAllowed = 'move';
-            setTimeout(() => el.classList.add('dragging'), 0);
-        }
-
-        function handleOutputItemDragEnd(e, el) {
-            el.classList.remove('dragging');
-            cleanupDropIndicators();
-        }
-
-        function handleOutputDragOver(e) {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = isReorderingOutput ? 'move' : 'copy';
-            const container = document.getElementById('output-items-container');
-            container.classList.add('drag-over');
-
-            const afterElement = getDragAfterElement(container, e.clientY);
-            cleanupDropIndicators();
-
-            if (afterElement == null) {
-                const placeholder = document.getElementById('output-empty-msg');
-                if (placeholder && placeholder.style.display !== 'none') {
-                    // Do nothing
-                } else {
-                    const indicator = getOrCreateIndicator();
-                    container.appendChild(indicator);
-                }
-            } else {
-                const indicator = getOrCreateIndicator();
-                container.insertBefore(indicator, afterElement);
-            }
-        }
-
-        function handleOutputDragEnter(e) {
-            e.preventDefault();
-            document.getElementById('output-items-container').classList.add('drag-over');
-        }
-
-        function handleOutputDragLeave(e) {
-            const container = document.getElementById('output-items-container');
-            if (!container.contains(e.relatedTarget)) {
-                container.classList.remove('drag-over');
-                cleanupDropIndicators();
-            }
-        }
-
-        function handleOutputDrop(e) {
-            e.preventDefault();
-            const container = document.getElementById('output-items-container');
-            container.classList.remove('drag-over');
-            
-            let itemObj = null;
+        async function setLiveEnabled(enabled) {
+            renderLiveEnabled(enabled);
             try {
-                const jsonStr = e.dataTransfer.getData('application/json');
-                if (jsonStr) itemObj = JSON.parse(jsonStr);
-            } catch(err) {}
-
-            if (!itemObj) {
-                itemObj = draggedData;
+                const res = await fetch('/api/live_enabled', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.error || 'Save failed');
+                applyState(data);
+                flashSaved();
+            } catch (err) {
+                console.error('Failed to switch live feed:', err);
+                renderLiveEnabled(!enabled);
+                alert('Could not switch the XML feed: ' + err.message);
             }
+        }
 
-            if (!itemObj) {
-                const plain = e.dataTransfer.getData('text/plain');
-                if (plain && plain.trim()) {
-                    itemObj = { source: 'custom', id: '', text: plain.trim() };
+        // --- Custom boxes panel ---
+        const ROW_HTML = `
+            <label class="switch" title="Put this box on or off air">
+                <input type="checkbox" class="custom-enabled" checked>
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+            </label>
+            <input type="text" class="custom-input custom-text" placeholder="Custom ticker text..." maxlength="500">
+            <div class="row-move">
+                <button type="button" class="btn-move" data-dir="-1" title="Move up">&#9650;</button>
+                <button type="button" class="btn-move" data-dir="1" title="Move down">&#9660;</button>
+            </div>
+            <button type="button" class="btn-remove" title="Delete box">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>`;
+
+        function customContainer() {
+            return document.getElementById('custom-items-container');
+        }
+
+        function collectCustomItems() {
+            return Array.from(customContainer().querySelectorAll('.custom-row')).map(row => ({
+                text: row.querySelector('.custom-text').value,
+                enabled: row.querySelector('.custom-enabled').checked
+            }));
+        }
+
+        function updateCustomUI() {
+            const rows = customContainer().querySelectorAll('.custom-row');
+            let on = 0;
+            rows.forEach(row => {
+                const enabled = row.querySelector('.custom-enabled').checked;
+                row.classList.toggle('is-off', !enabled);
+                if (enabled && row.querySelector('.custom-text').value.trim()) on++;
+            });
+            const badge = document.getElementById('custom-count');
+            if (badge) badge.textContent = `${on} On / ${rows.length}`;
+            const empty = document.getElementById('custom-empty');
+            if (empty) empty.style.display = rows.length ? 'none' : '';
+        }
+
+        function addCustomRow() {
+            const row = document.createElement('div');
+            row.className = 'custom-row';
+            row.innerHTML = ROW_HTML;
+            customContainer().appendChild(row);
+            updateCustomUI();
+            row.querySelector('.custom-text').focus();
+            // An empty box is not on air, so there is nothing to save until text is typed.
+        }
+
+        let customSaveTimer = null;
+        function scheduleCustomSave(delay) {
+            if (customSaveTimer) clearTimeout(customSaveTimer);
+            customSaveTimer = setTimeout(saveCustomItems, delay);
+        }
+
+        async function saveCustomItems() {
+            customSaveTimer = null;
+            try {
+                const res = await fetch('/api/custom_items', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ items: collectCustomItems() })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.error || 'Save failed');
+                renderOutput(data.output_items, data.ticker);
+                flashSaved();
+            } catch (err) {
+                console.error('Failed to save custom boxes:', err);
+                const status = document.getElementById('save-status');
+                if (status) {
+                    status.textContent = '✗ Not saved';
+                    status.style.color = '#f87171';
+                    status.style.display = 'inline-block';
                 }
             }
+        }
 
-            if (!itemObj || !itemObj.text || !itemObj.text.trim()) {
-                cleanupDropIndicators();
-                return;
-            }
+        function flashSaved() {
+            const status = document.getElementById('save-status');
+            if (!status) return;
+            status.textContent = '✓ Saved';
+            status.style.color = '#4ade80';
+            status.style.display = 'inline-block';
+            clearTimeout(flashSaved._t);
+            flashSaved._t = setTimeout(() => { status.style.display = 'none'; }, 1500);
+        }
 
-            const afterElement = getDragAfterElement(container, e.clientY);
-            cleanupDropIndicators();
-
-            if (isReorderingOutput && draggedElement && draggedElement.classList.contains('output-item-card')) {
-                // Reordering an existing output card
-                if (afterElement == null) {
-                    container.appendChild(draggedElement);
-                } else {
-                    container.insertBefore(draggedElement, afterElement);
+        function wireCustomPanel() {
+            const box = customContainer();
+            box.addEventListener('input', e => {
+                if (e.target.classList.contains('custom-text')) {
+                    updateCustomUI();
+                    scheduleCustomSave(700);
                 }
-            } else {
-                // Dragging a new item from Live Feed or Custom Feed
-                const newCard = createOutputCard(itemObj);
-                if (afterElement == null) {
-                    container.appendChild(newCard);
-                } else {
-                    container.insertBefore(newCard, afterElement);
+            });
+            box.addEventListener('change', e => {
+                if (e.target.classList.contains('custom-enabled')) {
+                    updateCustomUI();
+                    scheduleCustomSave(0);
                 }
-            }
-
-            updateOutputUI();
-            updateTickerPreview();
-            autoSaveOutput();
-            draggedData = null;
-            draggedElement = null;
-            isReorderingOutput = false;
+            });
+            box.addEventListener('click', e => {
+                const row = e.target.closest('.custom-row');
+                if (!row) return;
+                const move = e.target.closest('.btn-move');
+                if (move) {
+                    if (move.dataset.dir === '-1' && row.previousElementSibling) {
+                        box.insertBefore(row, row.previousElementSibling);
+                    } else if (move.dataset.dir === '1' && row.nextElementSibling) {
+                        box.insertBefore(row.nextElementSibling, row);
+                    } else {
+                        return;
+                    }
+                    scheduleCustomSave(0);
+                    return;
+                }
+                if (e.target.closest('.btn-remove')) {
+                    const text = row.querySelector('.custom-text').value.trim();
+                    if (text && !confirm(`Delete this box?\n\n${text}`)) return;
+                    row.remove();
+                    updateCustomUI();
+                    scheduleCustomSave(0);
+                }
+            });
         }
 
-        function createOutputCard(itemObj) {
-            if (typeof itemObj === 'string') {
-                itemObj = { source: 'custom', id: '', text: itemObj };
-            }
-            const source = itemObj.source || 'custom';
-            const id = itemObj.id || '';
-            const text = itemObj.text || '';
-
-            const card = document.createElement('div');
-            card.className = 'output-item-card';
-            card.draggable = true;
-            card.setAttribute('data-source', source);
-            card.setAttribute('data-id', id);
-            card.setAttribute('data-text', text);
-            card.ondragstart = function(e) { handleOutputItemDragStart(e, this); };
-            card.ondragend = function(e) { handleOutputItemDragEnd(e, this); };
-
-            const safeText = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-            const safeDataJson = JSON.stringify({ source: source, id: id, text: text })
-                .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-            const badgeHtml = source === 'live' 
-                ? '<span class="badge-source badge-source-live" title="Dynamically updates from live RSS feed">LIVE</span>' 
-                : '<span class="badge-source badge-source-custom" title="Custom static text">TEXT</span>';
-
-            card.innerHTML = `
-                <input type="hidden" name="output_item_data" value="${safeDataJson}">
-                <input type="hidden" name="output_item" value="${safeText}">
-                <div class="card-content">
-                    <span class="drag-handle" title="Drag to reorder">
-                        <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor"><circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/><circle cx="2" cy="7" r="1.5"/><circle cx="8" cy="7" r="1.5"/><circle cx="2" cy="12" r="1.5"/><circle cx="8" cy="12" r="1.5"/></svg>
-                    </span>
-                    <span class="card-index"></span>
-                    ${badgeHtml}
-                    <span class="card-text">${safeText}</span>
-                </div>
-                <button type="button" class="btn-remove" onclick="removeOutputRow(this)" title="Remove from output feed">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-            `;
-            return card;
-        }
-
-        function addItemToOutput(itemObj) {
-            if (!itemObj) return;
-            if (typeof itemObj === 'string') itemObj = { source: 'custom', id: '', text: itemObj };
-            if (!itemObj.text || !itemObj.text.trim()) return;
-            const container = document.getElementById('output-items-container');
-            const newCard = createOutputCard(itemObj);
-            container.appendChild(newCard);
-            updateOutputUI();
-            updateTickerPreview();
-            autoSaveOutput();
-        }
-
-        function addTextToOutput(text) {
-            addItemToOutput({ source: 'custom', id: '', text: text });
-        }
-
-        function addLiveItemToOutput(id, text) {
-            addItemToOutput({ source: 'live', id: id, text: text });
-        }
-
-        function removeOutputRow(btn) {
-            const card = btn.closest('.output-item-card');
-            if (card) {
-                card.remove();
-                updateOutputUI();
-                updateTickerPreview();
-                autoSaveOutput();
-            }
-        }
-
-        function clearAllOutput() {
-            const container = document.getElementById('output-items-container');
-            const cards = container.querySelectorAll('.output-item-card');
-            cards.forEach(card => card.remove());
-            updateOutputUI();
-            updateTickerPreview();
-            autoSaveOutput();
-        }
-
-        function updateOutputUI() {
-            const container = document.getElementById('output-items-container');
-            const cards = container.querySelectorAll('.output-item-card');
-            const placeholder = document.getElementById('output-empty-msg');
+        // --- On Air panel + ticker preview ---
+        function renderOutput(items, ticker) {
+            const list = document.getElementById('output-items-container');
             const badge = document.getElementById('output-count');
-
-            if (cards.length === 0) {
-                if (placeholder) placeholder.style.display = 'flex';
-            } else {
-                if (placeholder) placeholder.style.display = 'none';
-            }
-
-            cards.forEach((card, index) => {
-                const indexSpan = card.querySelector('.card-index');
-                if (indexSpan) {
-                    indexSpan.textContent = `${index + 1}.`;
+            if (badge) badge.textContent = `${items.length} Active`;
+            if (list) {
+                if (!items.length) {
+                    list.innerHTML = '<div class="list-empty">Nothing on air. Turn on the XML feed or a custom box.</div>';
+                } else {
+                    list.innerHTML = items.map((it, i) => {
+                        const badgeHtml = it.source === 'live'
+                            ? '<span class="badge-source badge-source-live">LIVE</span>'
+                            : '<span class="badge-source badge-source-custom">TEXT</span>';
+                        return `<div class="output-item-card"><div class="card-content"><span class="card-index">${i + 1}.</span>${badgeHtml}<span class="card-text">${escapeHtml(it.text)}</span></div></div>`;
+                    }).join('');
                 }
-            });
-
-            if (badge) {
-                badge.textContent = `${cards.length} Active`;
             }
+            updateTickerPreview(ticker);
         }
 
-        function updateTickerPreview() {
-            const cards = document.querySelectorAll('#output-items-container .output-item-card');
-            const items = [];
-            cards.forEach(card => {
-                const t = card.getAttribute('data-text');
-                if (t && t.trim()) items.push(t.trim());
-            });
-            const combined = items.join('  |  ');
+        function updateTickerPreview(combined) {
             const tickerWrapper = document.getElementById('broadcast-ticker');
             const tickerContent = document.querySelector('.ticker-content');
             if (tickerContent) {
@@ -1694,226 +1509,22 @@ HTML_TEMPLATE = """
             } catch(e) {}
         }
 
-        // --- Auto-save output to server ---
-        let saveTimeout = null;
-        let isSaving = false;
-        function autoSaveOutput() {
-            if (saveTimeout) clearTimeout(saveTimeout);
-            saveTimeout = setTimeout(doSaveOutput, 400);
+        function applyState(data) {
+            if (Array.isArray(data.live_items)) renderLiveItems(data.live_items);
+            if (typeof data.live_enabled === 'boolean') renderLiveEnabled(data.live_enabled);
+            if (Array.isArray(data.output_items)) renderOutput(data.output_items, data.ticker || '');
         }
-
-        function forceUpdateOutput() {
-            if (saveTimeout) clearTimeout(saveTimeout);
-            doSaveOutput();
-        }
-
-        async function doSaveOutput() {
-            if (isSaving) return;
-            isSaving = true;
-            const cards = document.querySelectorAll('#output-items-container .output-item-card');
-            const items = [];
-            cards.forEach(card => {
-                const source = card.getAttribute('data-source') || 'custom';
-                const id = card.getAttribute('data-id') || '';
-                const text = card.getAttribute('data-text') || '';
-                if (text.trim()) {
-                    items.push({ source: source, id: id, text: text.trim() });
-                }
-            });
-            try {
-                const res = await fetch('/api/save_output', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ items: items })
-                });
-                if (res.ok) {
-                    const statusEl = document.getElementById('save-status');
-                    if (statusEl) {
-                        statusEl.style.display = 'inline';
-                        statusEl.textContent = '✓ Saved';
-                        setTimeout(() => { statusEl.style.display = 'none'; }, 2000);
-                    }
-                }
-            } catch (err) {
-                console.error('Auto-save failed:', err);
-            } finally {
-                isSaving = false;
-            }
-        }
-
-        function getDragAfterElement(container, y) {
-            const draggableElements = [...container.querySelectorAll('.output-item-card:not(.dragging)')];
-
-            return draggableElements.reduce((closest, child) => {
-                const box = child.getBoundingClientRect();
-                const offset = y - box.top - box.height / 2;
-                if (offset < 0 && offset > closest.offset) {
-                    return { offset: offset, element: child };
-                } else {
-                    return closest;
-                }
-            }, { offset: Number.NEGATIVE_INFINITY }).element;
-        }
-
-        let activeIndicator = null;
-        function getOrCreateIndicator() {
-            if (!activeIndicator) {
-                activeIndicator = document.createElement('div');
-                activeIndicator.className = 'drop-insertion-line';
-            }
-            return activeIndicator;
-        }
-
-        function cleanupDropIndicators() {
-            if (activeIndicator && activeIndicator.parentElement) {
-                activeIndicator.parentElement.removeChild(activeIndicator);
-            }
-            activeIndicator = null;
-        }
-
-        function createLiveCard(item, index) {
-            const text = typeof item === 'object' ? item.title : item;
-            const id = typeof item === 'object' ? (item.id || '') : '';
-
-            const card = document.createElement('div');
-            card.className = 'draggable-card';
-            card.draggable = true;
-            card.setAttribute('data-source', 'live');
-            card.setAttribute('data-id', id);
-            card.setAttribute('data-text', text);
-            card.ondragstart = function(e) { handleSourceDragStart(e, this); };
-
-            const cardContent = document.createElement('div');
-            cardContent.className = 'card-content';
-
-            const dragHandle = document.createElement('span');
-            dragHandle.className = 'drag-handle';
-            dragHandle.title = 'Drag to Output Box';
-            dragHandle.innerHTML = '<svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor"><circle cx="2" cy="2" r="1.5"/><circle cx="8" cy="2" r="1.5"/><circle cx="2" cy="7" r="1.5"/><circle cx="8" cy="7" r="1.5"/><circle cx="2" cy="12" r="1.5"/><circle cx="8" cy="12" r="1.5"/></svg>';
-
-            const indexSpan = document.createElement('span');
-            indexSpan.className = 'card-index';
-            indexSpan.textContent = `${index + 1}.`;
-
-            const textSpan = document.createElement('span');
-            textSpan.className = 'card-text';
-            textSpan.textContent = text;
-
-            cardContent.appendChild(dragHandle);
-            cardContent.appendChild(indexSpan);
-            cardContent.appendChild(textSpan);
-
-            const addBtn = document.createElement('button');
-            addBtn.type = 'button';
-            addBtn.className = 'btn-quick-add';
-            addBtn.title = 'Quick add to output';
-            addBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg><span>Add</span>';
-            addBtn.onclick = function() { addItemToOutput({ source: 'live', id: id, text: text }); };
-
-            card.appendChild(cardContent);
-            card.appendChild(addBtn);
-            return card;
-        }
-
-        function renderLiveItems(items) {
-            const list = document.getElementById('live-items-list');
-            const badge = document.getElementById('live-count');
-            if (!list) return;
-
-            if (badge) {
-                badge.textContent = `${items.length} Items`;
-            }
-
-            list.innerHTML = '';
-            if (!items || items.length === 0) {
-                const emptyDiv = document.createElement('div');
-                emptyDiv.style.cssText = 'padding: 20px; text-align: center; color: #666; font-style: italic;';
-                emptyDiv.textContent = 'No live items currently available.';
-                list.appendChild(emptyDiv);
-                return;
-            }
-
-            items.forEach((item, index) => {
-                list.appendChild(createLiveCard(item, index));
-            });
-        }
-
-        function updateLiveOutputCards(itemsById) {
-            if (!itemsById) return;
-            const cards = document.querySelectorAll('#output-items-container .output-item-card');
-            let anyChanged = false;
-
-            cards.forEach(card => {
-                let source = card.getAttribute('data-source');
-                let id = card.getAttribute('data-id');
-                const currentText = card.getAttribute('data-text') || '';
-
-                if (!id || source !== 'live') {
-                    for (const [liveId, liveTitle] of Object.entries(itemsById)) {
-                        const parts = liveId.split('|');
-                        if ((parts.length === 2 && currentText.includes(parts[0]) && currentText.includes(parts[1])) ||
-                            currentText === liveTitle || currentText.includes(liveTitle) || liveTitle.includes(currentText)) {
-                            id = liveId;
-                            source = 'live';
-                            card.setAttribute('data-id', id);
-                            card.setAttribute('data-source', 'live');
-                            let badge = card.querySelector('.badge-source');
-                            if (badge) {
-                                badge.className = 'badge-source badge-source-live';
-                                badge.textContent = 'LIVE';
-                                badge.title = 'Dynamically updates from live RSS feed';
-                            }
-                            break;
-                        }
-                    }
-                }
-
-                if (source === 'live' && id && itemsById[id]) {
-                    const newTitle = itemsById[id];
-                    if (newTitle !== currentText) {
-                        card.setAttribute('data-text', newTitle);
-                        const textSpan = card.querySelector('.card-text');
-                        if (textSpan) textSpan.textContent = newTitle;
-                        
-                        const hiddenData = card.querySelector('input[name="output_item_data"]');
-                        if (hiddenData) {
-                            hiddenData.value = JSON.stringify({ source: 'live', id: id, text: newTitle });
-                        }
-                        const hiddenItem = card.querySelector('input[name="output_item"]');
-                        if (hiddenItem) {
-                            hiddenItem.value = newTitle;
-                        }
-
-                        card.classList.remove('card-updated');
-                        void card.offsetWidth;
-                        card.classList.add('card-updated');
-                        anyChanged = true;
-                    }
-                }
-            });
-
-            if (anyChanged) {
-                updateTickerPreview();
-                autoSaveOutput();
-            }
-        }
-
-        let isFetchingLive = false;
-        let refreshCycleInterval = null;
 
         async function refreshLiveItems(isManual = false) {
             if (isFetchingLive) return;
+            // Don't overwrite the On Air list while a custom-box edit is waiting to save.
+            if (customSaveTimer) return;
             isFetchingLive = true;
             try {
                 const res = await fetch('/api/live_items');
                 if (!res.ok) return;
                 const data = await res.json();
-                if (data && Array.isArray(data.live_items)) {
-                    renderLiveItems(data.live_items);
-                }
-                if (data && data.items_by_id) {
-                    updateLiveOutputCards(data.items_by_id);
-                }
+                if (!customSaveTimer) applyState(data);
                 updateCycleStatusUI(true, data.error);
             } catch (err) {
                 console.error('Error refreshing live items:', err);
@@ -2094,11 +1705,11 @@ HTML_TEMPLATE = """
             }
         }
 
-        // Initialize UI numbers on page load and start 15s auto-refresh
+        // Initialize the page and start the 15s auto-refresh
         document.addEventListener('DOMContentLoaded', () => {
             ppLoadStatus();
-            updateOutputUI();
-            updateCustomCount();
+            wireCustomPanel();
+            updateCustomUI();
 
             // Restore saved ticker speed
             try {
@@ -2183,68 +1794,57 @@ def fetch_live_data(live_link):
 
     return items, items_by_id, error
 
-def resolve_live_output_items(raw_output_items, live_items, items_by_id):
+def rebuild_output(config, live_items=None, error=None, refetched=True):
     """
-    Resolves output items against the latest live data.
-    Returns (updated_output_items, has_changed).
+    Recomputes output_items (live feed first, then enabled custom boxes) and
+    saves config.json if anything changed. When refetched is False, or the
+    fetch failed, the live part keeps the last stored live items.
+    Returns (output_items, changed).
     """
-    updated_items = []
-    has_changed = False
+    live_enabled, custom_items = ticker_settings(config)
+    previous = config.get("output_items")
+    output_items = build_output_items(
+        live_enabled, live_items or [], custom_items, previous,
+        live_ok=refetched and error is None,
+    )
+    changed = (
+        output_items != previous
+        or custom_items != config.get("custom_items")
+        or config.get("live_enabled") is not live_enabled
+    )
+    if changed:
+        config["live_enabled"] = live_enabled
+        config["custom_items"] = custom_items
+        config["output_items"] = output_items
+        save_config(config)
+    if output_items != previous:
+        activity_log.log_feed_change([it["text"] for it in output_items])
+    return output_items, changed
 
-    if raw_output_items is None:
-        raw_output_items = []
 
-    for it in raw_output_items:
-        if isinstance(it, dict):
-            src = it.get("source", "custom")
-            item_id = it.get("id", "")
-            current_text = it.get("text", "")
-            resolved_text = current_text
+def refresh_from_feed():
+    """Fetches the live feed (if on), rebuilds the ticker and returns the page state."""
+    config = get_config()
+    live_link = config.get("live_link") or DEFAULT_LIVE_LINK
+    live_enabled, custom_items = ticker_settings(config)
 
-            if src == "live":
-                if item_id and item_id in items_by_id:
-                    resolved_text = items_by_id[item_id]
-                else:
-                    for live_it in live_items:
-                        lid = live_it.get('id', '')
-                        ltitle = live_it.get('title', '')
-                        parts = lid.split('|')
-                        if (len(parts) == 2 and parts[0] in current_text and parts[1] in current_text) or \
-                           current_text.strip() == ltitle.strip() or current_text.strip() in ltitle or ltitle in current_text.strip():
-                            item_id = lid
-                            resolved_text = items_by_id.get(item_id, current_text)
-                            break
+    # Fetched even while the feed is off air, so the panel can still preview it.
+    live_items, error = [], None
+    if live_link and live_link.strip():
+        live_items, _items_by_id, error = fetch_live_data(live_link)
+        activity_log.log_live_items_change([it['title'] for it in live_items])
 
-            if resolved_text != current_text:
-                has_changed = True
-
-            updated_items.append({"source": src, "id": item_id, "text": resolved_text})
-
-        elif isinstance(it, str):
-            matched_id = None
-            resolved_text = it.strip()
-            for live_it in live_items:
-                lid = live_it.get('id', '')
-                ltitle = live_it.get('title', '')
-                parts = lid.split('|')
-                if len(parts) == 2 and parts[0] in it and parts[1] in it:
-                    matched_id = lid
-                    resolved_text = items_by_id.get(matched_id, it.strip())
-                    break
-                elif it.strip() == ltitle.strip() or it.strip() in ltitle or ltitle in it.strip():
-                    matched_id = lid
-                    resolved_text = items_by_id.get(matched_id, it.strip())
-                    break
-
-            if resolved_text != it.strip():
-                has_changed = True
-
-            if matched_id:
-                updated_items.append({"source": "live", "id": matched_id, "text": resolved_text})
-            else:
-                updated_items.append({"source": "custom", "id": "", "text": resolved_text})
-
-    return updated_items, has_changed
+    output_items, changed = rebuild_output(config, live_items, error)
+    return {
+        "live_enabled": live_enabled,
+        "live_link": live_link,
+        "live_items": live_items,
+        "custom_items": custom_items,
+        "output_items": output_items,
+        "ticker": ticker_text(output_items),
+        "error": error,
+        "changed": changed,
+    }
 
 # ==============================================================================
 # BACKGROUND AUTO-REFRESH WORKER
@@ -2263,32 +1863,14 @@ def run_single_refresh_cycle():
     """Performs one refresh cycle of live data and updates config.json if needed."""
     global cycle_status_data
     try:
-        config = get_config()
-        live_link = config.get("live_link") or DEFAULT_LIVE_LINK
-        if not live_link or not live_link.strip():
-            cycle_status_data["last_refresh"] = time.time()
-            cycle_status_data["last_error"] = None
-            return {"ok": True, "updated": False, "items_count": 0}
-
-        live_items, items_by_id, error = fetch_live_data(live_link)
-        if error:
-            cycle_status_data["last_error"] = error
-            return {"ok": False, "error": error}
-
-        activity_log.log_live_items_change([it['title'] for it in live_items])
-
-        raw_output_items = config.get("output_items", [])
-        updated_output_items, has_changed = resolve_live_output_items(raw_output_items, live_items, items_by_id)
-
-        if has_changed:
-            config['output_items'] = updated_output_items
-            save_config(config)
-            activity_log.log_feed_change([it['text'] for it in updated_output_items if it.get('text')])
-
+        state = refresh_from_feed()
+        if state["error"]:
+            cycle_status_data["last_error"] = state["error"]
+            return {"ok": False, "error": state["error"]}
         cycle_status_data["last_refresh"] = time.time()
         cycle_status_data["last_error"] = None
         cycle_status_data["refresh_count"] += 1
-        return {"ok": True, "updated": has_changed, "items_count": len(live_items)}
+        return {"ok": True, "updated": state["changed"], "items_count": len(state["live_items"])}
     except Exception as e:
         cycle_status_data["last_error"] = str(e)
         return {"ok": False, "error": str(e)}
@@ -2333,49 +1915,27 @@ def api_cycle_status():
 
 @app.route('/api/live_items')
 def api_live_items():
-    config = get_config()
-    live_link = config.get("live_link") or DEFAULT_LIVE_LINK
-    live_items, items_by_id, error = fetch_live_data(live_link)
-    activity_log.log_live_items_change([it['title'] for it in live_items])
-    return jsonify({
-        "live_items": live_items,
-        "items_by_id": items_by_id,
-        "error": error,
-        "count": len(live_items),
-        "cycle_status": cycle_status_data
-    })
+    """Fetches the live feed, rebuilds the ticker, and returns everything the page shows."""
+    state = refresh_from_feed()
+    state.pop("changed", None)
+    state["count"] = len(state["live_items"])
+    state["cycle_status"] = cycle_status_data
+    return jsonify(state)
 
 @app.route('/')
 def index():
+    state = refresh_from_feed()
     config = get_config()
-    custom_items = config.get("custom_items", [])
-    raw_output_items = config.get("output_items")
-    live_link = config.get("live_link") or DEFAULT_LIVE_LINK
-    
-    if raw_output_items is None:
-        raw_output_items = list(custom_items) if custom_items else []
-    
-    if not custom_items:
-        custom_items = [""]
-
-    # Fetch The Raw Source XML if a link is provided
-    live_items, items_by_id, error = fetch_live_data(live_link)
-
-    # Log the live feed content the first time it's fetched and whenever it changes.
-    activity_log.log_live_items_change([it['title'] for it in live_items])
-
-    output_items = resolve_output_items(raw_output_items, live_items, items_by_id)
-    combined_ticker = ticker_text(output_items)
-
     return render_template_string(
-        HTML_TEMPLATE, 
-        output_items=output_items,
-        live_items=live_items,
-        live_link=live_link,
-        combined_ticker=combined_ticker,
-        error=error,
+        HTML_TEMPLATE,
+        live_enabled=state["live_enabled"],
+        live_items=state["live_items"],
+        live_link=state["live_link"],
+        custom_items=state["custom_items"],
+        output_items=state["output_items"],
+        combined_ticker=state["ticker"],
+        error=state["error"],
         enable_spacer=config.get("enable_spacer", True),
-        custom_items=custom_items
     )
 
 @app.route('/save_live_link', methods=['POST'])
@@ -2387,6 +1947,8 @@ def save_live_link():
     save_config(config)
     # Log the XML feed URL change: records old URL > new URL
     activity_log.log_xml_change(old_url, new_url)
+    refresh_from_feed()
+    ticker_watcher.notify_change()
     return redirect(url_for('index'))
 
 @app.route('/toggle_spacer', methods=['POST'])
@@ -2394,49 +1956,62 @@ def toggle_spacer():
     config = get_config()
     config['enable_spacer'] = not config.get('enable_spacer', True)
     save_config(config)
+    ticker_watcher.notify_change()
     return redirect(url_for('index'))
 
-@app.route('/api/save_output', methods=['POST'])
-def api_save_output():
-    """JSON endpoint: auto-save output items from the client."""
+@app.route('/api/live_enabled', methods=['POST'])
+def api_live_enabled():
+    """Turns the live XML feed on or off air. JSON body: {"enabled": bool}."""
     data = request.get_json(silent=True) or {}
-    raw_items = data.get('items', [])
+    enabled = _as_bool(data.get('enabled', True))
+    config = get_config()
+    _live, custom_items = ticker_settings(config)
+    config['live_enabled'] = enabled
+    config['custom_items'] = custom_items
+    save_config(config)
+    activity_log.log_live_toggle(enabled)
+    state = refresh_from_feed()
+    ticker_watcher.notify_change()
+    state.pop("changed", None)
+    return jsonify(dict(state, ok=True))
 
-    cleaned_items = []
-    log_text_items = []
+@app.route('/api/custom_items', methods=['POST'])
+def api_custom_items():
+    """
+    Saves the custom boxes. JSON body: {"items": [{"text": str, "enabled": bool}, ...]}.
+    Boxes that are switched on go on air after the live feed, in this order.
+    Does not refetch the feed: the live part keeps the last fetched items.
+    """
+    data = request.get_json(silent=True) or {}
+    raw_items = data.get('items')
+    if not isinstance(raw_items, list):
+        return jsonify({"ok": False, "error": "items must be a list"}), 400
+
+    custom_items = []
     for it in raw_items:
-        if isinstance(it, dict) and it.get('text', '').strip():
-            cleaned_items.append({
-                "source": it.get("source", "custom"),
-                "id": it.get("id", ""),
-                "text": it.get("text", "").strip()
-            })
-            log_text_items.append(it["text"].strip())
-        elif isinstance(it, str) and it.strip():
-            cleaned_items.append({"source": "custom", "id": "", "text": it.strip()})
-            log_text_items.append(it.strip())
+        if isinstance(it, dict):
+            text = str(it.get('text', '') or '')
+            enabled = _as_bool(it.get('enabled', True))
+        else:
+            text, enabled = str(it or ''), True
+        custom_items.append({"text": text[:500], "enabled": enabled})
 
     config = get_config()
-    config['output_items'] = cleaned_items
-    save_config(config)
-    activity_log.log_feed_change(log_text_items)
+    live_enabled, _custom = ticker_settings(config)
+    config['live_enabled'] = live_enabled
+    config['custom_items'] = custom_items
+    output_items, _changed = rebuild_output(config, refetched=False)
+    activity_log.log_txt_change([
+        ("[on] " if b["enabled"] else "[off] ") + b["text"].strip()
+        for b in custom_items if b["text"].strip()
+    ])
     ticker_watcher.notify_change()
-    return jsonify({"ok": True, "count": len(cleaned_items)})
-
-@app.route('/save_custom', methods=['POST'])
-def save_custom():
-    config = get_config()
-    submitted_items = request.form.getlist('custom_item')
-    
-    # Strip whitespace and omit completely blank entries
-    cleaned_items = [item.strip() for item in submitted_items if item.strip()]
-    
-    config['custom_items'] = cleaned_items if cleaned_items else [""]
-    save_config(config)
-    # Log the custom text change: records every item currently in the static list
-    activity_log.log_txt_change(cleaned_items)
-    ticker_watcher.notify_change()
-    return redirect(url_for('index'))
+    return jsonify({
+        "ok": True,
+        "custom_items": custom_items,
+        "output_items": output_items,
+        "ticker": ticker_text(output_items),
+    })
 
 # ==============================================================================
 # PROPRESENTER INTEGRATION ROUTES

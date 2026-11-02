@@ -81,6 +81,8 @@ def get_rss():
         output_items = config.get("custom_items", [])
 
     for i, raw_item in enumerate(output_items):
+        if isinstance(raw_item, dict) and raw_item.get('enabled') is False:
+            continue
         item_text = raw_item.get('text', '') if isinstance(raw_item, dict) else str(raw_item)
         item_text = str(item_text).strip()
         if not item_text:

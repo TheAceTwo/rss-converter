@@ -73,6 +73,15 @@ def log_xml_change(old_url: str, new_url: str) -> None:
     _logger.info(line)
 
 
+def log_live_toggle(enabled: bool) -> None:
+    """
+    Logs the live XML feed being switched on or off air.
+    Example: 12:47:44 PM 2026-08-18 [XML] live feed turned OFF
+    """
+    line = f"{_timestamp()} [XML] live feed turned {'ON' if enabled else 'OFF'}"
+    _logger.info(line)
+
+
 def log_txt_change(items: list) -> None:
     """
     Logs a change to the custom (static) text items.

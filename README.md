@@ -7,7 +7,7 @@ Two Flask apps share one `config.json`:
 | App | Port | Purpose |
 |---|---|---|
 | `app.py` | 5050 (`FEED_PORT`) | Serves `/rss`, the feed ProPresenter reads. No login. |
-| `gui.py` | 5001 (`GUI_PORT`) | Control panel: pick live items and custom text, order the ticker, configure ProPresenter. Login required. |
+| `gui.py` | 5001 (`GUI_PORT`) | Control panel: turn the live XML feed on or off, manage custom text boxes, configure ProPresenter. Login required. |
 
 The feed uses 5050 rather than Flask's usual 5000 because AirPlay Receiver holds port 5000 on macOS 12 and later.
 
@@ -47,6 +47,23 @@ python gui.py        # control panel, port 5001
 ```
 
 Open http://localhost:5001. On first run the GUI shows a setup page: add `auth_username` and `auth_password` to `config.json` by hand, then reload. Set `XML_URL` in the environment or paste the live XML URL in the panel.
+
+## Using the control panel
+
+The ticker is always built in this order:
+
+1. **Live XML feed**: every item from the feed, in feed order, refreshed every 15 seconds. Nothing to pick or drag: when the feed is on, all of it is on air.
+2. **Custom boxes**: each box that is switched on, top to bottom.
+
+| Panel | What it does |
+|---|---|
+| **Live XML Feed** | Feed URL, plus an **ON AIR / OFF** switch. Off takes the whole feed out of the ticker so only custom boxes run; the panel still previews the feed, greyed out. |
+| **Custom Boxes** | Text boxes with their own on/off switch, ▲▼ to reorder, ✕ to delete, and **Add Custom Box**. Everything saves automatically. |
+| **On Air** | Read-only view of exactly what `/rss` is sending, with LIVE and TEXT tags, plus the ProPresenter settings. |
+
+If the feed can't be reached, the last fetched scores stay on air until it comes back.
+
+Configs from older versions upgrade automatically: custom presets that were on air start switched on, the rest start switched off.
 
 ## ProPresenter auto-refresh
 

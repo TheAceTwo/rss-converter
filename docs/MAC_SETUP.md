@@ -83,7 +83,8 @@ folder and add your credentials:
 ```
 
 Reload the page and log in. Paste the live XML URL into the panel (or set `XML_URL` in
-`rss-converter.env`).
+`rss-converter.env`). Every feed item then goes on air automatically, followed by any custom boxes
+you switch on. See "Using the control panel" in the [README](../README.md#using-the-control-panel).
 
 ## 5. Start automatically at login
 
