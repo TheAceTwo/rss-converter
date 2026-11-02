@@ -10,7 +10,15 @@ from flask import Flask, Response
 app = Flask(__name__)
 
 DEFAULT_LIVE_LINK = os.environ.get('XML_URL', '')
-CONFIG_FILE = 'config.json'
+
+# config.json lives next to this file (not the current directory) so the feed
+# and the control panel always share one file, however they are launched.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.environ.get('RSS_CONFIG_FILE') or os.path.join(BASE_DIR, 'config.json')
+
+# Port 5000 is taken by AirPlay Receiver on macOS 12+, so the feed defaults to 5050.
+FEED_HOST = os.environ.get('FEED_HOST', '0.0.0.0')
+FEED_PORT = int(os.environ.get('FEED_PORT', '5050'))
 
 # ==============================================================================
 # DEFAULT CONFIGURATION
@@ -63,7 +71,7 @@ def get_rss():
     rss = ET.Element("rss", version="2.0")
     channel = ET.SubElement(rss, "channel")
     ET.SubElement(channel, "title").text = "Dynamic RSS Feed"
-    ET.SubElement(channel, "link").text = source_url or "http://localhost:5000/rss"
+    ET.SubElement(channel, "link").text = source_url or f"http://localhost:{FEED_PORT}/rss"
     ET.SubElement(channel, "description").text = "Live dynamic feed conversion"
     ET.SubElement(channel, "lastBuildDate").text = formatdate(usegmt=True)
     ET.SubElement(channel, "ttl").text = "1"
@@ -111,4 +119,4 @@ def get_rss():
     return resp
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host=FEED_HOST, port=FEED_PORT)

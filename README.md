@@ -6,15 +6,44 @@ Two Flask apps share one `config.json`:
 
 | App | Port | Purpose |
 |---|---|---|
-| `app.py` | 5000 | Serves `/rss`, the feed ProPresenter reads. No login. |
-| `gui.py` | 5001 | Control panel: pick live items and custom text, order the ticker, configure ProPresenter. Login required. |
+| `app.py` | 5050 (`FEED_PORT`) | Serves `/rss`, the feed ProPresenter reads. No login. |
+| `gui.py` | 5001 (`GUI_PORT`) | Control panel: pick live items and custom text, order the ticker, configure ProPresenter. Login required. |
 
-## Run
+The feed uses 5050 rather than Flask's usual 5000 because AirPlay Receiver holds port 5000 on macOS 12 and later.
+
+## Ports and settings
+
+| Port / setting | Default | Used for |
+|---|---|---|
+| `FEED_PORT` | 5050 | RSS feed, `http://<host>:5050/rss`. Point ProPresenter's Linked Text here. |
+| `GUI_PORT` | 5001 | Control panel, `http://<host>:5001` |
+| `FEED_HOST` / `GUI_HOST` | `0.0.0.0` | Address each app listens on. `127.0.0.1` keeps it local to the machine. |
+| ProPresenter API port | set in ProPresenter | Entered in the control panel; ProPresenter > Settings > Network |
+| `SECRET_KEY` | built-in placeholder | Signs login cookies. Set your own. |
+| `XML_URL` | empty | Optional default live XML source |
+| `RSS_CONFIG_FILE` | `config.json` next to the code | Shared config for both apps |
+
+## Run on a Mac (recommended)
+
+The Mac scripts create a virtualenv, generate `rss-converter.env` with the settings above, and can install
+launchd agents so both apps start at login:
+
+```bash
+mac/run.sh                 # run in this Terminal window (Ctrl+C to stop)
+mac/install-launchd.sh     # start at login and restart on crash
+mac/uninstall-launchd.sh   # remove the login services
+```
+
+Full step-by-step setup, including firewall, sleep, and ProPresenter settings: [docs/MAC_SETUP.md](docs/MAC_SETUP.md).
+
+The earlier Docker-based deployment is preserved on the [`docker-deploy`](https://github.com/TheAceTwo/rss-converter/tree/docker-deploy) branch.
+
+## Run manually (any OS)
 
 ```bash
 pip install -r requirements.txt
-python app.py &      # feed
-python gui.py        # control panel
+python app.py &      # feed, port 5050
+python gui.py        # control panel, port 5001
 ```
 
 Open http://localhost:5001. On first run the GUI shows a setup page: add `auth_username` and `auth_password` to `config.json` by hand, then reload. Set `XML_URL` in the environment or paste the live XML URL in the panel.
@@ -24,7 +53,7 @@ Open http://localhost:5001. On first run the GUI shows a setup page: add `auth_u
 ProPresenter loads an RSS Linked Text source only when its prop is triggered and never re-polls. This tool re-triggers the prop for you whenever the ticker content changes.
 
 1. In ProPresenter: Settings > Network, turn on **Enable Network**, note the IP and port.
-2. In ProPresenter: build the ticker as a **Prop** with a Scrolling Text object whose Linked Text is RSS pointing at `http://<this-machine>:5000/rss`.
+2. In ProPresenter: build the ticker as a **Prop** with a Scrolling Text object whose Linked Text is RSS pointing at `http://<this-machine>:5050/rss`.
 3. In the control panel, under the live URL: enter the IP and port, click **Test Connection**, choose the ticker prop.
 4. Pick a refresh mode and press **Trigger Now** to preview each one live on the output screen. Trigger Now uses whatever mode is selected, saved or not, so you can compare all three in a minute:
    - **Trigger only**: the scroll restarts from the first item in place.

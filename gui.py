@@ -13,7 +13,11 @@ from watcher import TickerWatcher
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'rss-converter-gui-secret-key-999')
-CONFIG_FILE = 'config.json'
+# Same config.json as app.py: next to the code, not the current directory.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.environ.get('RSS_CONFIG_FILE') or os.path.join(BASE_DIR, 'config.json')
+GUI_HOST = os.environ.get('GUI_HOST', '0.0.0.0')
+GUI_PORT = int(os.environ.get('GUI_PORT', '5001'))
 DEFAULT_LIVE_LINK = os.environ.get('XML_URL', '')
 config_lock = threading.Lock()
 
@@ -2640,4 +2644,4 @@ def logout():
 if __name__ == '__main__':
     ensure_background_worker_started()
     ticker_watcher.start()
-    app.run(host='0.0.0.0', port=5001)
+    app.run(host=GUI_HOST, port=GUI_PORT)
