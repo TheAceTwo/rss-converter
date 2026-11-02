@@ -8,3 +8,4 @@ venv/
 rss-converter.env
 logs/
 .env
+.secret_key

@@ -217,3 +217,27 @@ def test_auth_env_unset_means_setup_page(tmp_config, monkeypatch):
     res = gui.app.test_client().get("/")
     assert res.status_code == 302
     assert "/setup" in res.headers["Location"]
+
+
+def test_blank_secret_key_generates_and_persists_one(tmp_path, monkeypatch):
+    import gui
+    monkeypatch.setenv("SECRET_KEY", "  ")
+    monkeypatch.setattr(gui, "CONFIG_FILE", str(tmp_path / "config.json"))
+    first = gui.load_secret_key()
+    assert len(first) >= 32
+    assert (tmp_path / ".secret_key").read_text().strip() == first
+    assert gui.load_secret_key() == first      # same key after a restart
+
+
+def test_secret_key_env_wins(monkeypatch):
+    import gui
+    monkeypatch.setenv("SECRET_KEY", "from-env")
+    assert gui.load_secret_key() == "from-env"
+
+
+def test_login_post_succeeds(tmp_config):
+    import gui
+    client = gui.app.test_client()
+    res = client.post("/login", data={"username": "tester", "password": "secret"})
+    assert res.status_code == 302
+    assert res.headers["Location"].endswith("/")

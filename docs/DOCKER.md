@@ -28,7 +28,7 @@ custom boxes, ProPresenter settings) and `rss_changes.log`, so settings survive 
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `SECRET_KEY` | **yes** | none (deploy fails without it) | Signs control panel login cookies. Use a long random string. |
+| `SECRET_KEY` | no | random | Signs control panel login cookies. If blank, a random key is generated once and saved as `.secret_key` next to `config.json`. |
 | `AUTH_USERNAME` | yes, unless set in `config.json` | empty | Control panel username |
 | `AUTH_PASSWORD` | yes, unless set in `config.json` | empty | Control panel password |
 | `FEED_HOST_PORT` | no | `5000` | Host port for the RSS feed |
@@ -45,7 +45,7 @@ If `auth_username` and `auth_password` are both set in `config.json`, those win 
    - If the repo is private, turn on **Authentication** and use your GitHub username and a personal access token with read access to the repo.
 4. Repository reference: `refs/heads/main`
 5. Compose path: `docker-compose.yml`
-6. **Environment variables:** add `SECRET_KEY`, `AUTH_USERNAME` and `AUTH_PASSWORD` (and any others from the table above).
+6. **Environment variables:** add `AUTH_USERNAME` and `AUTH_PASSWORD` (and any others from the table above).
 7. Optional: turn on **GitOps updates** (polling or webhook) so Portainer redeploys when `main` changes.
    Turn on **Re-pull image and redeploy** / force rebuild if offered, so code changes are rebuilt.
 8. **Deploy the stack.**
@@ -76,7 +76,8 @@ That style still works with the current `main`. Change two things:
 
 1. **Add `FEED_PORT=5000`** to the feed service's `environment`. Outside Docker the feed now defaults to
    5050, so without this the `5000:5000` mapping points at nothing.
-2. **Add `SECRET_KEY`** (and optionally `AUTH_USERNAME` / `AUTH_PASSWORD`) to the GUI service's `environment`.
+2. Optional: `AUTH_USERNAME` / `AUTH_PASSWORD` on the GUI service. You don't need `SECRET_KEY`; if it is
+   missing or blank, a random key is generated and saved as `.secret_key` in the mounted folder.
 
 `config.json` and `rss_changes.log` stay in the mounted folder, as before. Older configs upgrade
 automatically the first time the control panel starts.
@@ -91,7 +92,6 @@ leaves it alone from then on.
 git clone https://github.com/TheAceTwo/rss-converter.git
 cd rss-converter
 cat > .env <<'ENV'
-SECRET_KEY=change-me-to-something-long-and-random
 AUTH_USERNAME=admin
 AUTH_PASSWORD=choose-a-password
 ENV

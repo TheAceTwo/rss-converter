@@ -25,7 +25,7 @@ services:
     ports:
       - "${GUI_HOST_PORT:-5001}:5001"
     environment:
-      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY to a long random string}
+      SECRET_KEY: ${SECRET_KEY:-}   # optional; blank = random key saved in /data
       AUTH_USERNAME: ${AUTH_USERNAME:-}
       AUTH_PASSWORD: ${AUTH_PASSWORD:-}
       XML_URL: ${XML_URL:-}

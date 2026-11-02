@@ -19,7 +19,7 @@ The feed uses 5050 rather than Flask's usual 5000 because AirPlay Receiver holds
 | `GUI_PORT` | 5001 | Control panel, `http://<host>:5001` |
 | `FEED_HOST` / `GUI_HOST` | `0.0.0.0` | Address each app listens on. `127.0.0.1` keeps it local to the machine. |
 | ProPresenter API port | set in ProPresenter | Entered in the control panel; ProPresenter > Settings > Network |
-| `SECRET_KEY` | built-in placeholder | Signs login cookies. Set your own. |
+| `SECRET_KEY` | random, saved as `.secret_key` | Signs login cookies. Leave blank to auto-generate. |
 | `AUTH_USERNAME` / `AUTH_PASSWORD` | empty | Control panel login, used when `config.json` doesn't set `auth_username` / `auth_password` |
 | `RSS_LOG_FILE` | `rss_changes.log` next to the code | Activity log location |
 | `XML_URL` | empty | Optional default live XML source |
@@ -44,7 +44,7 @@ The earlier Docker-based deployment is preserved on the [`docker-deploy`](https:
 
 `main` also deploys as a Portainer stack straight from this GitHub repo (Stacks > Add stack > Repository,
 compose path `docker-compose.yml`). In Docker the feed is published on host port **5000** by default, so
-existing ProPresenter URLs keep working; the control panel stays on 5001. Set `SECRET_KEY`, `AUTH_USERNAME`
+existing ProPresenter URLs keep working; the control panel stays on 5001. Set `AUTH_USERNAME`
 and `AUTH_PASSWORD` as stack environment variables.
 
 Full steps, variables and upgrade notes: [docs/DOCKER.md](docs/DOCKER.md).

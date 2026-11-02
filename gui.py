@@ -1,4 +1,5 @@
 import os
+import secrets
 import json
 import time
 import threading
@@ -12,10 +13,37 @@ import propresenter
 from watcher import TickerWatcher
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'rss-converter-gui-secret-key-999')
 # Same config.json as app.py: next to the code, not the current directory.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.environ.get('RSS_CONFIG_FILE') or os.path.join(BASE_DIR, 'config.json')
+def load_secret_key():
+    """
+    The key that signs login cookies. Uses SECRET_KEY when it is set and not
+    blank. Otherwise generates a random key once and keeps it in a
+    .secret_key file next to config.json, so logins work with no setup and
+    survive restarts. (An empty key makes Flask fail every login with a 500.)
+    """
+    key = os.environ.get('SECRET_KEY', '').strip()
+    if key:
+        return key
+    key_file = os.path.join(os.path.dirname(os.path.abspath(CONFIG_FILE)), '.secret_key')
+    try:
+        with open(key_file, 'r', encoding='utf-8') as f:
+            key = f.read().strip()
+        if key:
+            return key
+    except OSError:
+        pass
+    key = secrets.token_hex(32)
+    try:
+        with open(key_file, 'w', encoding='utf-8') as f:
+            f.write(key)
+    except OSError:
+        pass  # read-only folder: the key still works until the next restart
+    return key
+
+
+app.secret_key = load_secret_key()
 GUI_HOST = os.environ.get('GUI_HOST', '0.0.0.0')
 GUI_PORT = int(os.environ.get('GUI_PORT', '5001'))
 DEFAULT_LIVE_LINK = os.environ.get('XML_URL', '')
